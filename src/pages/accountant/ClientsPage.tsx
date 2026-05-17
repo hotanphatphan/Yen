@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Search, Building2, User } from 'lucide-react'
+import { Plus, Search, Building2, User, ChevronRight } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -8,7 +8,6 @@ import { AccountantLayout, PageHeader } from '@/components/shared/AccountantLayo
 import { Button } from '@/components/shared/Button'
 import { Input } from '@/components/shared/Input'
 import { Label } from '@/components/shared/Label'
-import { Card, CardContent } from '@/components/shared/Card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/shared/Dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/shared/Select'
 import { Textarea } from '@/components/shared/Textarea'
@@ -31,6 +30,21 @@ type FormData = z.infer<typeof schema>
 const TYPE_LABELS: Record<string, string> = {
   cong_ty: 'Công ty',
   ho_kinh_doanh: 'Hộ kinh doanh',
+}
+
+// Generate a deterministic vibrant color from company name
+function avatarColor(name: string) {
+  const colors = [
+    'linear-gradient(135deg, #6366F1, #8B5CF6)',
+    'linear-gradient(135deg, #F59E0B, #EF4444)',
+    'linear-gradient(135deg, #10B981, #3B82F6)',
+    'linear-gradient(135deg, #EC4899, #8B5CF6)',
+    'linear-gradient(135deg, #0EA5E9, #6366F1)',
+    'linear-gradient(135deg, #F97316, #EF4444)',
+    'linear-gradient(135deg, #14B8A6, #6366F1)',
+  ]
+  const idx = Math.abs(name.charCodeAt(0) * 13 + name.charCodeAt(1 % name.length) * 7) % colors.length
+  return colors[idx]
 }
 
 export default function ClientsPage() {
@@ -69,7 +83,7 @@ export default function ClientsPage() {
     <AccountantLayout>
       <PageHeader
         title="Khách hàng"
-        subtitle={`${companies.length} khách hàng`}
+        subtitle={`${companies.length} khách hàng đang quản lý`}
         actions={
           <Button onClick={() => setOpen(true)} size="sm">
             <Plus className="h-4 w-4" />
@@ -78,26 +92,31 @@ export default function ClientsPage() {
         }
       />
 
-      <div className="p-6 space-y-4">
+      <div className="p-6 space-y-5">
+        {/* Search */}
         <div className="relative max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-          <Input
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <input
             placeholder="Tìm theo tên hoặc MST..."
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="pl-9"
+            className="w-full pl-10 pr-4 py-2.5 text-sm rounded-xl border border-slate-200 bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 transition-all placeholder:text-slate-400"
           />
         </div>
 
         {isLoading ? (
-          <div className="text-center py-12 text-gray-400">Đang tải...</div>
+          <div className="text-center py-16 text-slate-400">Đang tải...</div>
         ) : filtered.length === 0 ? (
-          <div className="text-center py-12 text-gray-400">
-            <Building2 className="h-10 w-10 mx-auto mb-2 opacity-30" />
-            <p>{search ? 'Không tìm thấy khách hàng' : 'Chưa có khách hàng. Bấm "Thêm khách hàng" để bắt đầu.'}</p>
+          <div className="text-center py-16">
+            <div className="mx-auto mb-4 h-20 w-20 rounded-2xl bg-slate-100 flex items-center justify-center">
+              <Building2 className="h-10 w-10 text-slate-300" />
+            </div>
+            <p className="text-slate-400 text-sm">
+              {search ? 'Không tìm thấy khách hàng' : 'Chưa có khách hàng. Bấm "Thêm khách hàng" để bắt đầu.'}
+            </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             {filtered.map(company => (
               <ClientCard
                 key={company.id}
@@ -185,31 +204,40 @@ export default function ClientsPage() {
 }
 
 function ClientCard({ company, onClick }: { company: Company; onClick: () => void }) {
+  const initials = company.name
+    .split(' ')
+    .map(w => w[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase()
+
   return (
-    <Card
-      className="cursor-pointer hover:border-blue-300 hover:shadow-sm transition-all"
+    <button
+      className="group flex items-center gap-4 bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:border-indigo-200 transition-all duration-200 p-4 text-left w-full"
       onClick={onClick}
     >
-      <CardContent className="py-4 px-5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-full bg-blue-100 flex items-center justify-center">
-              {company.business_type === 'cong_ty'
-                ? <Building2 className="h-4 w-4 text-blue-600" />
-                : <User className="h-4 w-4 text-blue-600" />
-              }
-            </div>
-            <div>
-              <p className="font-medium text-gray-900">{company.name}</p>
-              <p className="text-xs text-gray-400">MST: {company.mst} · {TYPE_LABELS[company.business_type]}</p>
-            </div>
-          </div>
-          <div className="text-right text-xs text-gray-400">
-            {company.owner_name && <p>{company.owner_name}</p>}
-            {company.owner_phone && <p>{company.owner_phone}</p>}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+      {/* Avatar */}
+      <div
+        className="h-12 w-12 rounded-xl flex items-center justify-center text-white font-bold text-base shrink-0 shadow-sm"
+        style={{ background: avatarColor(company.name) }}
+      >
+        {initials || (company.business_type === 'cong_ty' ? <Building2 className="h-5 w-5" /> : <User className="h-5 w-5" />)}
+      </div>
+
+      {/* Info */}
+      <div className="flex-1 min-w-0">
+        <p className="font-semibold text-slate-800 group-hover:text-indigo-600 transition-colors truncate">{company.name}</p>
+        <p className="text-xs text-slate-400 mt-0.5">
+          MST: {company.mst} · <span className="text-slate-500">{TYPE_LABELS[company.business_type]}</span>
+        </p>
+        {company.owner_name && (
+          <p className="text-xs text-slate-400 mt-0.5">{company.owner_name}{company.owner_phone ? ` · ${company.owner_phone}` : ''}</p>
+        )}
+      </div>
+
+      {/* Arrow */}
+      <ChevronRight className="h-4 w-4 text-slate-300 group-hover:text-indigo-400 transition-colors shrink-0" />
+    </button>
   )
 }
