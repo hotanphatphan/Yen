@@ -52,11 +52,11 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
+    <div className="flex min-h-screen items-center justify-center px-4" style={{ background: 'hsl(0 0% 96%)' }}>
       <div className="w-full max-w-md space-y-6">
         <div className="text-center">
-          <h1 className="text-2xl font-bold text-blue-700">Yen</h1>
-          <p className="text-sm text-gray-500 mt-1">Tạo tài khoản mới</p>
+          <h1 className="text-3xl font-bold tracking-tight" style={{ color: 'hsl(244 54% 32%)' }}>Yen</h1>
+          <p className="eyebrow-accent mt-2">Tạo tài khoản mới</p>
         </div>
 
         <Card>
@@ -99,7 +99,7 @@ export default function RegisterPage() {
 
             <p className="mt-4 text-center text-sm text-gray-500">
               Đã có tài khoản?{' '}
-              <Link to="/login" className="text-blue-600 hover:underline font-medium">
+              <Link to="/login" className="font-medium hover:underline" style={{ color: 'hsl(244 54% 32%)' }}>
                 Đăng nhập
               </Link>
             </p>
