@@ -1,49 +1,49 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap");
 
 @import "tailwindcss";
 
 @theme {
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --color-dark: hsl(244 47% 20%);
-  --color-dark-foreground: hsl(0 0% 100%);
-  --color-dark-muted: hsl(244 30% 70%);
+  --color-dark: #0F172A;
+  --color-dark-foreground: #ffffff;
+  --color-dark-muted: #94A3B8;
 }
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 10%;
+    --background: 214 32% 97%;
+    --foreground: 222 47% 11%;
 
     --card: 0 0% 100%;
-    --card-foreground: 0 0% 10%;
+    --card-foreground: 222 47% 11%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 10%;
+    --popover-foreground: 222 47% 11%;
 
-    --primary: 244 54% 32%;
+    --primary: 239 84% 67%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 192 60% 60%;
-    --secondary-foreground: 0 0% 10%;
+    --secondary: 43 96% 56%;
+    --secondary-foreground: 222 47% 11%;
 
-    --muted: 0 0% 96%;
-    --muted-foreground: 220 9% 46%;
+    --muted: 214 32% 94%;
+    --muted-foreground: 215 16% 47%;
 
-    --accent: 190 75% 45%;
-    --accent-foreground: 0 0% 10%;
+    --accent: 239 84% 67%;
+    --accent-foreground: 0 0% 100%;
 
-    --destructive: 0 75% 55%;
+    --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 0 0% 88%;
-    --input: 0 0% 88%;
-    --ring: 244 54% 32%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 239 84% 67%;
 
-    --dark: 244 47% 20%;
+    --dark: 222 47% 11%;
     --dark-foreground: 0 0% 100%;
-    --dark-muted: 244 30% 70%;
+    --dark-muted: 215 20% 65%;
 
-    --radius: 0rem;
+    --radius: 0.75rem;
   }
 }
 
@@ -73,13 +73,45 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.22em;
-    color: hsl(var(--foreground));
+    color: hsl(var(--muted-foreground));
   }
   .eyebrow-accent {
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.22em;
-    color: hsl(var(--accent));
+    color: hsl(var(--secondary));
+  }
+
+  /* Hero gradient banner */
+  .gradient-hero {
+    background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 50%, #9333EA 100%);
+  }
+
+  /* Sidebar dot pattern */
+  .sidebar-dots {
+    background-image: radial-gradient(circle, rgba(255,255,255,0.08) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+
+  /* Ambient glow blob */
+  .sidebar-glow {
+    background: radial-gradient(ellipse at top right, rgba(99, 102, 241, 0.35) 0%, transparent 60%);
+  }
+
+  /* Card premium style */
+  .card-premium {
+    background: white;
+    border-radius: 1rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05), 0 4px 16px rgba(0,0,0,0.06);
+    border: none;
+  }
+
+  /* Stat number style */
+  .stat-number {
+    font-size: 2rem;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.02em;
   }
 }
