@@ -201,6 +201,17 @@ export interface QuarterClosing {
   created_at: string
 }
 
+export interface JournalEntry {
+  id: string
+  company_id: string
+  date: string
+  description: string | null
+  debit_account: string
+  credit_account: string
+  amount: number
+  created_at: string
+}
+
 export interface DraftTransaction {
   row_index: number
   date: string

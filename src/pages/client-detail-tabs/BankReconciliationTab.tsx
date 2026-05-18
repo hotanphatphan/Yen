@@ -113,6 +113,14 @@ export default function BankReconciliationTab({ companyId }: { companyId: string
     t => !bankTransactions.some(bt => bt.matched_transaction_id === t.id)
   )
 
+  // Ending balance comparison
+  const sortedByDate = [...bankTransactions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+  const bankEndingBalance = sortedByDate[0]?.balance ?? null
+  const softwareEndingBalance = ledgerTransactions.reduce((sum, t) => {
+    return t.type === 'income' ? sum + t.amount : sum - t.amount
+  }, 0)
+  const balanceDiff = bankEndingBalance !== null ? Math.round(bankEndingBalance) - Math.round(softwareEndingBalance) : null
+
   return (
     <div className="space-y-4">
       {/* Import */}
@@ -128,6 +136,32 @@ export default function BankReconciliationTab({ companyId }: { companyId: string
 
       {bankTransactions.length > 0 && (
         <>
+          {/* Ending balance comparison */}
+          {bankEndingBalance !== null && (
+            <div className={`rounded-lg border-2 p-4 ${balanceDiff === 0 ? 'border-green-300 bg-green-50' : 'border-red-200 bg-red-50'}`}>
+              <p className="text-sm font-semibold text-gray-800 mb-3">Đối chiếu số dư cuối kỳ</p>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600">Số dư theo sao kê ngân hàng</span>
+                  <span className="font-medium">{formatVND(bankEndingBalance)}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600">Số dư theo phần mềm (TK 112)</span>
+                  <span className="font-medium">{formatVND(softwareEndingBalance)}</span>
+                </div>
+                <div className="flex justify-between items-center border-t pt-2 mt-1">
+                  <span className="font-semibold">Chênh lệch</span>
+                  {balanceDiff === 0
+                    ? <span className="font-bold text-green-600 flex items-center gap-1">
+                        <span>0 ✓ Đã đối chiếu xong</span>
+                      </span>
+                    : <span className="font-bold text-red-600">{formatVND(Math.abs(balanceDiff as number))} (chưa khớp)</span>
+                  }
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Summary */}
           <div className="grid grid-cols-3 gap-4">
             {[
