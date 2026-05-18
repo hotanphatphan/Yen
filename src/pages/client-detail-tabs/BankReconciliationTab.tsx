@@ -98,8 +98,8 @@ export default function BankReconciliationTab({ companyId }: { companyId: string
         qc.invalidateQueries({ queryKey: ['bank-statements', companyId] })
         qc.invalidateQueries({ queryKey: ['bank-transactions', companyId] })
       }
-    } catch {
-      alert('Lỗi đọc file. Thử lại với file CSV/Excel từ ngân hàng.')
+    } catch (err) {
+      alert('Lỗi: ' + (err instanceof Error ? err.message : String(err)))
     }
     setParsing(false)
     e.target.value = ''
