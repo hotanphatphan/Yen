@@ -5,7 +5,7 @@ import { Button } from '@/components/shared/Button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/shared/Card'
 import { Badge } from '@/components/shared/Badge'
 import { supabase } from '@/lib/supabase'
-import { parseBankStatement } from '@/lib/excel/parseBankStatement'
+import { parseBankStatementWithGemini } from '@/lib/excel/parseBankStatement'
 import { useTransactions } from '@/hooks/useTransactions'
 import { formatDate, formatVND } from '@/lib/utils'
 import type { BankTransaction, BankStatement } from '@/types'
@@ -76,7 +76,7 @@ export default function BankReconciliationTab({ companyId }: { companyId: string
     setParsing(true)
     try {
       const buffer = await file.arrayBuffer()
-      const rows = parseBankStatement(buffer)
+      const rows = await parseBankStatementWithGemini(buffer)
 
       const { data: stmt } = await supabase.from('bank_statements').insert({
         company_id: companyId,
