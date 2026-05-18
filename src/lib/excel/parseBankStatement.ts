@@ -46,6 +46,9 @@ function parseDate(raw: unknown): string {
   return s
 }
 
+// Keywords that reliably appear in transaction header rows
+const HEADER_KEYWORDS = ['debit', 'credit', 'nợ', 'no', 'có', 'co', 'ghi nợ', 'ghi có', 'phát sinh', 'phat sinh']
+
 export function parseBankStatement(buffer: ArrayBuffer): ParsedBankRow[] {
   const wb = XLSX.read(buffer, { type: 'array', codepage: 1258 })
   const ws = wb.Sheets[wb.SheetNames[0]]
@@ -53,11 +56,13 @@ export function parseBankStatement(buffer: ArrayBuffer): ParsedBankRow[] {
 
   if (rows.length < 2) return []
 
-  // Find header row (first row with >3 non-empty cells)
+  // Find header row: scan up to 40 rows, look for a row containing debit/credit keywords
   let headerRowIdx = 0
-  for (let i = 0; i < Math.min(10, rows.length); i++) {
-    const row = rows[i] as unknown[]
-    if (row.filter(Boolean).length >= 3) { headerRowIdx = i; break }
+  for (let i = 0; i < Math.min(40, rows.length); i++) {
+    const row = (rows[i] as unknown[]).map(c => normalize(String(c ?? '')))
+    const hasDebitOrCredit = HEADER_KEYWORDS.some(kw => row.some(cell => cell.includes(kw)))
+    const hasDate = DATE_ALIASES.some(kw => row.some(cell => cell.includes(kw)))
+    if (hasDebitOrCredit && hasDate) { headerRowIdx = i; break }
   }
 
   const headers = (rows[headerRowIdx] as unknown[]).map(h => String(h ?? ''))
