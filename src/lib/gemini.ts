@@ -35,8 +35,8 @@ export async function autoMatchTransactions(
     body: { bankTxs, invoices },
   })
 
-  if (error) throw new Error(`Edge function error: ${error.message}`)
-  if (data?.error) throw new Error(`Gemini error: ${data.error}`)
+  if (data?.error) throw new Error(data.error)
+  if (error) throw new Error(error.message)
 
   return data.data as GeminiMatchResult[]
 }

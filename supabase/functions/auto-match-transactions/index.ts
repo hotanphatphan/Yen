@@ -1,31 +1,19 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
   try {
     const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-    if (!GEMINI_API_KEY) {
-      return new Response(JSON.stringify({ error: "GEMINI_API_KEY not configured" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY secret not configured. Add it in Supabase Edge Function Secrets.");
 
     const { bankTxs, invoices } = await req.json();
-    if (!bankTxs || !invoices) {
-      return new Response(JSON.stringify({ error: "bankTxs and invoices are required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    if (!bankTxs || !invoices) throw new Error("bankTxs and invoices are required");
 
     const prompt = `Bạn là kế toán viên chuyên nghiệp theo chuẩn VAS (Vietnam Accounting Standards).
 
@@ -67,38 +55,43 @@ Format: [{
 
 Chỉ trả về JSON array, không thêm text khác.`;
 
-    const geminiRes = await fetch(
+    const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.1 },
+          generationConfig: { temperature: 0.1, maxOutputTokens: 8192 },
         }),
       }
     );
 
-    if (!geminiRes.ok) {
-      const errText = await geminiRes.text();
-      return new Response(JSON.stringify({ error: `Gemini API error: ${geminiRes.status}`, detail: errText }), {
-        status: 502,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    if (!response.ok) {
+      const err = await response.text();
+      console.error("Gemini error response:", err);
+      throw new Error(`Gemini API error: ${err}`);
     }
 
-    const geminiData = await geminiRes.json();
-    let text = geminiData.candidates?.[0]?.content?.parts?.[0]?.text ?? "[]";
-    // Strip markdown code fences if present
-    text = text.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "").trim();
+    const geminiData = await response.json();
+    const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text ?? "[]";
+    const cleaned = rawText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
 
-    const results = JSON.parse(text);
+    let results;
+    try {
+      results = JSON.parse(cleaned);
+    } catch {
+      const match = cleaned.match(/\[[\s\S]*\]/);
+      if (match) results = JSON.parse(match[0]);
+      else throw new Error("Could not parse Gemini response as JSON");
+    }
+
     return new Response(JSON.stringify({ data: results }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  } catch (err) {
-    return new Response(JSON.stringify({ error: String(err) }), {
-      status: 500,
+  } catch (error: any) {
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 400,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }

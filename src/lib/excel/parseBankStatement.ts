@@ -84,8 +84,8 @@ export async function parseBankStatementWithGemini(buffer: ArrayBuffer): Promise
     body: { sheetPreview },
   })
 
-  if (error) throw new Error(`Edge function error: ${error.message}`)
-  if (data?.error) throw new Error(`Gemini error: ${data.error}`)
+  if (data?.error) throw new Error(data.error)
+  if (error) throw new Error(error.message)
 
   const mapping: ColumnMapping = data.data
   return applyMapping(rows, mapping)
