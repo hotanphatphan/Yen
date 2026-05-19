@@ -74,7 +74,7 @@ function SectionChiPhi({ companyId }: { companyId: string }) {
       setMatchResults(results)
       setEditedResults(results)
     } catch (e) {
-      alert('Lỗi kết nối Gemini. Kiểm tra API key trong .env')
+      alert('Lỗi: ' + (e instanceof Error ? e.message : String(e)))
     }
     setMatching(false)
   }
@@ -158,7 +158,7 @@ function SectionChiPhi({ companyId }: { companyId: string }) {
       <div className="flex items-center gap-3">
         <Button onClick={runGemini} disabled={matching || bankTxs.length === 0} variant="outline">
           {matching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4 text-indigo-500" />}
-          {matching ? 'Đang chạy Gemini...' : 'Chạy Gemini auto-match'}
+          {matching ? 'Đang phân tích...' : 'Auto-match & đề xuất tài khoản'}
         </Button>
         <p className="text-xs text-gray-400">
           {bankTxs.length} giao dịch ngân hàng chờ hạch toán
