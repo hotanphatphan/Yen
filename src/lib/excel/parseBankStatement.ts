@@ -41,21 +41,31 @@ function parseDate(raw: unknown): string {
 }
 
 function normalize(v: unknown): string {
-  return String(v ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
+  return String(v ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')  // bỏ dấu tiếng Việt
+    .replace(/\n/g, ' ')
+    .trim()
 }
+
+// Từ khóa cho từng loại cột — hỗ trợ TCB, VCB, BIDV, MB, ACB, VPBank, Agribank
+const DATE_KW   = ['ngay giao dich', 'transaction date', 'posting date', 'value date', 'ngay hieu luc', 'ngay kh', 'ngay gd', 'ngay thang', 'ngay', 'date']
+const DESC_KW   = ['dien giai', 'noi dung giao dich', 'noi dung', 'mo ta', 'ghi chu', 'description', 'transaction description', 'transaction detail', 'detail', 'remark', 'nhan vien']
+const CREDIT_KW = ['so tien ghi co', 'tien ghi co', 'phat sinh co', 'ghi co', 'tien vao', 'co/credit', 'ps co', 'credit', 'credits']
+const DEBIT_KW  = ['so tien ghi no', 'tien ghi no', 'phat sinh no', 'ghi no', 'tien ra', 'no/debit', 'ps no', 'debit', 'debits']
+const AMOUNT_KW = ['so tien giao dich', 'so tien', 'amount', 'transaction amount']
+const BAL_KW    = ['so du cuoi ky', 'so du cuoi', 'so du', 'du cuoi', 'running balance', 'closing balance', 'ending balance', 'balance']
 
 function colMatch(cell: unknown, keywords: string[]): boolean {
   const v = normalize(cell)
-  return keywords.some(k => v.includes(k))
+  if (!v) return false
+  return keywords.some(k => {
+    // Từ ngắn (≤4 ký tự, ví dụ "no", "co", "date") → match exact hoặc bắt đầu bằng từ đó
+    if (k.length <= 4) return v === k || v.startsWith(k + '/') || v.startsWith(k + ' ')
+    return v.includes(k)
+  })
 }
-
-// Keywords cho từng loại cột — cả tiếng Việt (đã bỏ dấu) và tiếng Anh
-const DATE_KW   = ['ngay giao dich', 'transaction date', 'posting date', 'value date', 'ngay kh', 'ngay gd', 'ngay thang', 'ngay', 'date']
-const DESC_KW   = ['dien giai', 'noi dung', 'mo ta', 'ghi chu', 'description', 'detail', 'remark', 'transaction detail']
-const CREDIT_KW = ['ghi co', 'tien vao', 'phat sinh co', 'credit', 'co/', '/co', 'co\n', 'credits', 'ps co']
-const DEBIT_KW  = ['ghi no', 'tien ra', 'phat sinh no', 'debit', 'no/', '/no', 'no\n', 'debits', 'ps no']
-const AMOUNT_KW = ['so tien', 'tien', 'amount', 'transaction amount']
-const BAL_KW    = ['so du', 'du cuoi', 'balance', 'running balance', 'closing balance', 'ending balance']
 
 function detectMapping(rows: unknown[][]): ColumnMapping | null {
   for (let r = 0; r < Math.min(rows.length, 30); r++) {
