@@ -1,5 +1,4 @@
 import * as XLSX from 'xlsx'
-import { detectBankColumns } from '../gemini'
 
 export interface ParsedBankRow {
   date: string
@@ -8,13 +7,21 @@ export interface ParsedBankRow {
   balance: number | null
 }
 
-import type { ColumnMapping } from '../gemini'
-export type { ColumnMapping }
+interface ColumnMapping {
+  headerRowIdx: number
+  dateCol: number
+  descCol: number
+  debitCol: number   // debit = tiền ra (có thể đã âm sẵn, hoặc dương tùy ngân hàng)
+  creditCol: number  // credit = tiền vào (luôn dương)
+  amountCol: number  // một cột tổng hợp (nếu không tách nợ/có)
+  balanceCol: number
+  debitIsNegative: boolean // true nếu ngân hàng lưu debit là số âm sẵn
+}
 
 function parseAmount(raw: unknown): number {
-  if (!raw && raw !== 0) return 0
+  if (raw === null || raw === undefined || raw === '') return 0
   if (typeof raw === 'number') return Math.round(raw)
-  const s = String(raw).replace(/[^\d.\-]/g, '')
+  const s = String(raw).replace(/,/g, '').replace(/[^\d.\-]/g, '')
   return Math.round(parseFloat(s || '0')) || 0
 }
 
@@ -25,75 +32,102 @@ function parseDate(raw: unknown): string {
     return `${d.y}-${String(d.m).padStart(2, '0')}-${String(d.d).padStart(2, '0')}`
   }
   const s = String(raw).trim()
+  // yyyy-mm-dd or yyyy-mm-dd hh:mm:ss
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
-  const match = s.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/)
-  if (match) return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`
+  // dd/mm/yyyy or dd-mm-yyyy
+  const m = s.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/)
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`
   return s
 }
 
-function applyMapping(rows: unknown[][], mapping: ColumnMapping): ParsedBankRow[] {
-  const { dateCol, descCol, creditCol, debitCol, amountCol, balanceCol, headerRowIdx } = mapping
-  const results: ParsedBankRow[] = []
-
-  for (let i = headerRowIdx + 1; i < rows.length; i++) {
-    const row = rows[i] as unknown[]
-    if (!row || row.every(cell => !cell)) continue
-
-    const date = parseDate(row[dateCol])
-    const description = String(row[descCol] ?? '').trim()
-    if (!date && !description) continue
-
-    let amount = 0
-    if (creditCol >= 0 && row[creditCol]) {
-      amount = parseAmount(row[creditCol])
-    } else if (debitCol >= 0 && row[debitCol]) {
-      amount = -parseAmount(row[debitCol])
-    } else if (amountCol >= 0) {
-      amount = parseAmount(row[amountCol])
-    }
-
-    const balance = balanceCol >= 0 && row[balanceCol] ? parseAmount(row[balanceCol]) : null
-    results.push({ date, description, amount, balance })
-  }
-
-  return results
+function normalize(v: unknown): string {
+  return String(v ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
 }
 
-// Rule-based fallback: detect columns from Vietnamese/English header keywords
-function detectByRules(rows: unknown[][]): ColumnMapping | null {
-  const DATE_KEYS = ['ngày', 'date', 'ngay', 'ngày gd', 'ngày giao dịch', 'transaction date', 'posting date', 'value date']
-  const DESC_KEYS = ['diễn giải', 'nội dung', 'mô tả', 'ghi chú', 'description', 'detail', 'noi dung', 'mo ta', 'dien giai', 'tran description']
-  const CREDIT_KEYS = ['ghi có', 'tiền vào', 'credit', 'credits', 'ps co', 'phát sinh có', 'phat sinh co', 'ghi co']
-  const DEBIT_KEYS = ['ghi nợ', 'tiền ra', 'debit', 'debits', 'ps no', 'phát sinh nợ', 'phat sinh no', 'ghi no']
-  const AMOUNT_KEYS = ['số tiền', 'tiền', 'amount', 'so tien', 'tien', 'transaction amount']
-  const BALANCE_KEYS = ['số dư', 'dư cuối', 'balance', 'so du', 'du cuoi', 'ending balance', 'closing balance']
+function colMatch(cell: unknown, keywords: string[]): boolean {
+  const v = normalize(cell)
+  return keywords.some(k => v.includes(k))
+}
 
-  function match(cell: unknown, keys: string[]): boolean {
-    const v = String(cell ?? '').toLowerCase().trim()
-    return keys.some(k => v.includes(k))
-  }
+// Keywords cho từng loại cột — cả tiếng Việt (đã bỏ dấu) và tiếng Anh
+const DATE_KW   = ['ngay giao dich', 'transaction date', 'posting date', 'value date', 'ngay kh', 'ngay gd', 'ngay thang', 'ngay', 'date']
+const DESC_KW   = ['dien giai', 'noi dung', 'mo ta', 'ghi chu', 'description', 'detail', 'remark', 'transaction detail']
+const CREDIT_KW = ['ghi co', 'tien vao', 'phat sinh co', 'credit', 'co/', '/co', 'co\n', 'credits', 'ps co']
+const DEBIT_KW  = ['ghi no', 'tien ra', 'phat sinh no', 'debit', 'no/', '/no', 'no\n', 'debits', 'ps no']
+const AMOUNT_KW = ['so tien', 'tien', 'amount', 'transaction amount']
+const BAL_KW    = ['so du', 'du cuoi', 'balance', 'running balance', 'closing balance', 'ending balance']
 
-  for (let r = 0; r < Math.min(rows.length, 20); r++) {
+function detectMapping(rows: unknown[][]): ColumnMapping | null {
+  for (let r = 0; r < Math.min(rows.length, 30); r++) {
     const row = rows[r] as unknown[]
-    if (!row || row.length < 3) continue
+    if (!row || row.filter(Boolean).length < 3) continue
 
     let dateCol = -1, descCol = -1, creditCol = -1, debitCol = -1, amountCol = -1, balanceCol = -1
 
     for (let c = 0; c < row.length; c++) {
-      if (dateCol < 0 && match(row[c], DATE_KEYS)) dateCol = c
-      else if (descCol < 0 && match(row[c], DESC_KEYS)) descCol = c
-      else if (creditCol < 0 && match(row[c], CREDIT_KEYS)) creditCol = c
-      else if (debitCol < 0 && match(row[c], DEBIT_KEYS)) debitCol = c
-      else if (amountCol < 0 && match(row[c], AMOUNT_KEYS)) amountCol = c
-      else if (balanceCol < 0 && match(row[c], BALANCE_KEYS)) balanceCol = c
+      const cell = row[c]
+      if (!cell) continue
+      if (dateCol < 0   && colMatch(cell, DATE_KW))   { dateCol = c;   continue }
+      if (descCol < 0   && colMatch(cell, DESC_KW))   { descCol = c;   continue }
+      if (creditCol < 0 && colMatch(cell, CREDIT_KW)) { creditCol = c; continue }
+      if (debitCol < 0  && colMatch(cell, DEBIT_KW))  { debitCol = c;  continue }
+      if (amountCol < 0 && colMatch(cell, AMOUNT_KW)) { amountCol = c; continue }
+      if (balanceCol < 0 && colMatch(cell, BAL_KW))   { balanceCol = c; continue }
     }
 
-    // Need at least date + description + some amount column
+    // Cần tối thiểu: cột ngày + mô tả + ít nhất 1 cột tiền
     if (dateCol >= 0 && descCol >= 0 && (creditCol >= 0 || debitCol >= 0 || amountCol >= 0)) {
-      return { headerRowIdx: r, dateCol, descCol, creditCol, debitCol, amountCol, balanceCol }
+      // Kiểm tra debit có phải đã là số âm chưa (dựa vào vài dòng data đầu tiên)
+      let debitIsNegative = false
+      if (debitCol >= 0) {
+        for (let dr = r + 1; dr < Math.min(rows.length, r + 10); dr++) {
+          const val = parseAmount((rows[dr] as unknown[])[debitCol])
+          if (val !== 0) { debitIsNegative = val < 0; break }
+        }
+      }
+      return { headerRowIdx: r, dateCol, descCol, creditCol, debitCol, amountCol, balanceCol, debitIsNegative }
     }
   }
   return null
+}
+
+function applyMapping(rows: unknown[][], m: ColumnMapping): ParsedBankRow[] {
+  const results: ParsedBankRow[] = []
+
+  for (let i = m.headerRowIdx + 1; i < rows.length; i++) {
+    const row = rows[i] as unknown[]
+    if (!row || row.every(cell => cell === null || cell === undefined || cell === '')) continue
+
+    const date = parseDate(row[m.dateCol])
+    const description = String(row[m.descCol] ?? '').replace(/\n/g, ' ').trim()
+    if (!date && !description) continue
+
+    let amount = 0
+
+    if (m.creditCol >= 0 && row[m.creditCol]) {
+      const credit = parseAmount(row[m.creditCol])
+      if (credit > 0) { amount = credit }
+    }
+    if (amount === 0 && m.debitCol >= 0 && row[m.debitCol]) {
+      const debit = parseAmount(row[m.debitCol])
+      if (debit !== 0) {
+        // Nếu ngân hàng lưu debit là âm sẵn (như TCB) → giữ nguyên
+        // Nếu ngân hàng lưu debit là dương (phần lớn VCB, BIDV) → đổi âm
+        amount = m.debitIsNegative ? debit : -Math.abs(debit)
+      }
+    }
+    if (amount === 0 && m.amountCol >= 0 && row[m.amountCol]) {
+      amount = parseAmount(row[m.amountCol])
+    }
+
+    const balance = m.balanceCol >= 0 && row[m.balanceCol] != null
+      ? parseAmount(row[m.balanceCol])
+      : null
+
+    results.push({ date, description, amount, balance })
+  }
+
+  return results
 }
 
 export async function parseBankStatementWithGemini(buffer: ArrayBuffer): Promise<ParsedBankRow[]> {
@@ -101,21 +135,23 @@ export async function parseBankStatementWithGemini(buffer: ArrayBuffer): Promise
   const ws = wb.Sheets[wb.SheetNames[0]]
   const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1 }) as unknown[][]
 
-  if (rows.length < 2) return []
+  if (rows.length < 2) throw new Error('File trống hoặc không đúng định dạng')
 
-  // Try rule-based first (fast, no API needed)
-  const ruleMapping = detectByRules(rows)
-  if (ruleMapping) {
-    console.log('Bank statement: dùng rule-based detection', ruleMapping)
-    return applyMapping(rows, ruleMapping)
+  const mapping = detectMapping(rows)
+
+  if (!mapping) {
+    throw new Error(
+      'Không nhận dạng được cột trong file sao kê này.\n' +
+      'Hỗ trợ: TCB, VCB, BIDV, MB, ACB, VPBank, Agribank.\n' +
+      'File cần có các cột: Ngày, Mô tả/Diễn giải, Số tiền.'
+    )
   }
 
-  // Fall back to Gemini if rules couldn't detect
-  console.log('Bank statement: rule-based thất bại, thử Gemini...')
-  const sheetPreview = rows.slice(0, 30).map((row, i) =>
-    `Row ${i}: ${(row as unknown[]).map((c, j) => `[${j}]${String(c ?? '').slice(0, 40)}`).join(' | ')}`
-  ).join('\n')
+  const results = applyMapping(rows, mapping)
 
-  const mapping: ColumnMapping = await detectBankColumns(sheetPreview)
-  return applyMapping(rows, mapping)
+  if (results.length === 0) {
+    throw new Error('Đọc được cấu trúc file nhưng không tìm thấy giao dịch nào.')
+  }
+
+  return results
 }
