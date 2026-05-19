@@ -1,5 +1,5 @@
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY as string
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${API_KEY}`
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${API_KEY}`
 
 async function callGemini(prompt: string, maxTokens = 8192): Promise<string> {
   if (!API_KEY || API_KEY === 'undefined') throw new Error('VITE_GEMINI_API_KEY chưa được cấu hình. Thêm vào file .env và Vercel Environment Variables.')
