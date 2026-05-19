@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Upload, Link2, Plus } from 'lucide-react'
+import { Upload, Link2, Plus, CheckCircle2, AlertCircle, XCircle } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/shared/Button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/shared/Card'
@@ -10,9 +10,12 @@ import { useTransactions } from '@/hooks/useTransactions'
 import { formatDate, formatVND } from '@/lib/utils'
 import type { BankTransaction, BankStatement } from '@/types'
 
+type ImportStatus = { type: 'success'; count: number; fileName: string } | { type: 'error'; message: string } | null
+
 export default function BankReconciliationTab({ companyId }: { companyId: string }) {
   const qc = useQueryClient()
   const [parsing, setParsing] = useState(false)
+  const [importStatus, setImportStatus] = useState<ImportStatus>(null)
   const [matchingBankId, setMatchingBankId] = useState<string | null>(null)
 
   const { data: statements = [] } = useQuery({
@@ -74,6 +77,7 @@ export default function BankReconciliationTab({ companyId }: { companyId: string
     const file = e.target.files?.[0]
     if (!file) return
     setParsing(true)
+    setImportStatus(null)
     try {
       const buffer = await file.arrayBuffer()
       const rows = await parseBankStatementWithGemini(buffer)
@@ -97,9 +101,10 @@ export default function BankReconciliationTab({ companyId }: { companyId: string
         )
         qc.invalidateQueries({ queryKey: ['bank-statements', companyId] })
         qc.invalidateQueries({ queryKey: ['bank-transactions', companyId] })
+        setImportStatus({ type: 'success', count: rows.length, fileName: file.name })
       }
     } catch (err) {
-      alert('Lỗi: ' + (err instanceof Error ? err.message : String(err)))
+      setImportStatus({ type: 'error', message: err instanceof Error ? err.message : String(err) })
     }
     setParsing(false)
     e.target.value = ''
@@ -124,14 +129,44 @@ export default function BankReconciliationTab({ companyId }: { companyId: string
   return (
     <div className="space-y-4">
       {/* Import */}
-      <div className="flex items-center gap-3">
-        <input type="file" accept=".csv,.xlsx,.xls" className="hidden" id="bank-import" onChange={handleImport} />
-        <label htmlFor="bank-import">
-          <Button asChild variant="outline" disabled={parsing}>
-            <span><Upload className="h-4 w-4" />{parsing ? 'Đang đọc...' : 'Import sao kê ngân hàng'}</span>
-          </Button>
-        </label>
-        <p className="text-xs text-gray-500">Hỗ trợ CSV/Excel từ VCB, TCB, BIDV, MB và các ngân hàng khác</p>
+      <div className="space-y-2">
+        <div className="flex items-center gap-3">
+          <input type="file" accept=".csv,.xlsx,.xls" className="hidden" id="bank-import" onChange={handleImport} />
+          <label htmlFor="bank-import">
+            <Button asChild variant="outline" disabled={parsing}>
+              <span>
+                {parsing ? <><span className="animate-spin mr-1">⏳</span>Đang đọc file...</> : <><Upload className="h-4 w-4" />Import sao kê ngân hàng</>}
+              </span>
+            </Button>
+          </label>
+          <p className="text-xs text-gray-500">Hỗ trợ Excel/CSV từ TCB, VCB, BIDV, MB, ACB, VPBank, Agribank</p>
+        </div>
+
+        {importStatus?.type === 'success' && (
+          <div className="flex items-start gap-2 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
+            <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
+            <div className="text-sm">
+              <p className="font-medium text-green-800">Import thành công!</p>
+              <p className="text-green-700">Đã đọc <strong>{importStatus.count}</strong> giao dịch từ <em>{importStatus.fileName}</em></p>
+            </div>
+            <button onClick={() => setImportStatus(null)} className="ml-auto text-green-400 hover:text-green-600">
+              <XCircle className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
+        {importStatus?.type === 'error' && (
+          <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-4 py-3">
+            <AlertCircle className="h-4 w-4 text-red-600 mt-0.5 shrink-0" />
+            <div className="text-sm">
+              <p className="font-medium text-red-800">Lỗi import</p>
+              <p className="text-red-700 whitespace-pre-line">{importStatus.message}</p>
+            </div>
+            <button onClick={() => setImportStatus(null)} className="ml-auto text-red-400 hover:text-red-600">
+              <XCircle className="h-4 w-4" />
+            </button>
+          </div>
+        )}
       </div>
 
       {bankTransactions.length > 0 && (
