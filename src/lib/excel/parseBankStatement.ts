@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx'
-import { supabase } from '../supabase'
+import { detectBankColumns } from '../gemini'
 
 export interface ParsedBankRow {
   date: string
@@ -8,15 +8,8 @@ export interface ParsedBankRow {
   balance: number | null
 }
 
-export interface ColumnMapping {
-  dateCol: number
-  descCol: number
-  creditCol: number
-  debitCol: number
-  amountCol: number
-  balanceCol: number
-  headerRowIdx: number
-}
+import type { ColumnMapping } from '../gemini'
+export type { ColumnMapping }
 
 function parseAmount(raw: unknown): number {
   if (!raw && raw !== 0) return 0
@@ -68,7 +61,7 @@ function applyMapping(rows: unknown[][], mapping: ColumnMapping): ParsedBankRow[
   return results
 }
 
-// Gemini-powered: detect column mapping via Supabase Edge Function
+// Gemini-powered: detect column mapping directly via Gemini API
 export async function parseBankStatementWithGemini(buffer: ArrayBuffer): Promise<ParsedBankRow[]> {
   const wb = XLSX.read(buffer, { type: 'array', codepage: 1258 })
   const ws = wb.Sheets[wb.SheetNames[0]]
@@ -80,13 +73,6 @@ export async function parseBankStatementWithGemini(buffer: ArrayBuffer): Promise
     `Row ${i}: ${(row as unknown[]).map((c, j) => `[${j}]${String(c ?? '').slice(0, 40)}`).join(' | ')}`
   ).join('\n')
 
-  const { data, error } = await supabase.functions.invoke('parse-bank-statement', {
-    body: { sheetPreview },
-  })
-
-  if (data?.error) throw new Error(data.error)
-  if (error) throw new Error(error.message)
-
-  const mapping: ColumnMapping = data.data
+  const mapping: ColumnMapping = await detectBankColumns(sheetPreview)
   return applyMapping(rows, mapping)
 }
