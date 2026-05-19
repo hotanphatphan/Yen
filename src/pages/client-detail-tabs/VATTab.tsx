@@ -57,15 +57,45 @@ export default function VATTab({ companyId }: { companyId: string }) {
     dateTo: qEnd,
   })
 
+  // Also aggregate VAT from posted invoices in the period
+  const { data: postedInvoices = [] } = useQuery({
+    queryKey: ['invoices-vat', companyId, qStart, qEnd],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('invoices')
+        .select('direction, subtotal, vat_amount, invoice_date, seller_name, buyer_name')
+        .eq('company_id', companyId)
+        .eq('status', 'posted')
+        .gte('invoice_date', qStart)
+        .lte('invoice_date', qEnd)
+      return data ?? []
+    },
+  })
+
   const vatRate = (company?.vat_rate ?? 10) / 100
 
   const revenueTransactions = transactions.filter(t => t.type === 'income')
   const expenseTransactions = transactions.filter(t => t.type === 'expense')
 
   const totalRevenue = revenueTransactions.reduce((s, t) => s + t.amount, 0)
-  const outputVAT = vatPeriod ? vatPeriod.output_vat : Math.round(totalRevenue * vatRate)
 
-  const inputVAT = vatPeriod ? vatPeriod.input_vat : expenseTransactions.reduce((s, t) => s + t.vat_amount, 0)
+  // Output VAT: from transactions + from outgoing (sale) invoices
+  const invoiceOutputVAT = postedInvoices
+    .filter((i: { direction: string }) => i.direction === 'outgoing')
+    .reduce((s: number, i: { vat_amount: number }) => s + i.vat_amount, 0)
+  const txOutputVAT = Math.round(totalRevenue * vatRate)
+  const outputVAT = vatPeriod
+    ? vatPeriod.output_vat
+    : invoiceOutputVAT > 0 ? invoiceOutputVAT : txOutputVAT
+
+  // Input VAT: from transactions + from incoming (purchase) invoices
+  const invoiceInputVAT = postedInvoices
+    .filter((i: { direction: string }) => i.direction === 'incoming')
+    .reduce((s: number, i: { vat_amount: number }) => s + i.vat_amount, 0)
+  const txInputVAT = expenseTransactions.reduce((s, t) => s + t.vat_amount, 0)
+  const inputVAT = vatPeriod
+    ? vatPeriod.input_vat
+    : invoiceInputVAT > 0 ? invoiceInputVAT : txInputVAT
 
   const [manualOutputVAT, setManualOutputVAT] = useState<number | null>(null)
   const [manualInputVAT, setManualInputVAT] = useState<number | null>(null)
@@ -169,7 +199,11 @@ export default function VATTab({ companyId }: { companyId: string }) {
           <CardHeader><CardTitle className="text-sm">VAT đầu vào</CardTitle></CardHeader>
           <CardContent className="space-y-3">
             <div>
-              <p className="text-xs text-gray-500">Từ giao dịch chi có VAT</p>
+              <p className="text-xs text-gray-500">
+                {invoiceInputVAT > 0
+                  ? `Từ ${postedInvoices.filter((i: { direction: string }) => i.direction === 'incoming').length} hóa đơn mua vào đã hạch toán`
+                  : 'Từ giao dịch chi có VAT'}
+              </p>
               <p className="text-xl font-bold text-gray-900">{formatVND(inputVAT)}</p>
             </div>
             <div>

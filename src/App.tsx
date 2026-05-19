@@ -13,6 +13,7 @@ import DashboardPage from '@/pages/accountant/DashboardPage'
 import ClientsPage from '@/pages/accountant/ClientsPage'
 import ClientDetailPage from '@/pages/accountant/ClientDetailPage'
 import CalendarPage from '@/pages/accountant/CalendarPage'
+import InvoicesPage from '@/pages/accountant/InvoicesPage'
 
 import PortalPage from '@/pages/portal/PortalPage'
 
@@ -41,6 +42,7 @@ export default function App() {
             <Route path="/dashboard" element={<ProtectedRoute role="accountant"><DashboardPage /></ProtectedRoute>} />
             <Route path="/clients" element={<ProtectedRoute role="accountant"><ClientsPage /></ProtectedRoute>} />
             <Route path="/clients/:companyId" element={<ProtectedRoute role="accountant"><ClientDetailPage /></ProtectedRoute>} />
+            <Route path="/invoices" element={<ProtectedRoute role="accountant"><InvoicesPage /></ProtectedRoute>} />
             <Route path="/calendar" element={<ProtectedRoute role="accountant"><CalendarPage /></ProtectedRoute>} />
 
             {/* Client Portal */}

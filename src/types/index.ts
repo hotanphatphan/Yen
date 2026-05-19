@@ -1,5 +1,58 @@
 export type UserRole = 'accountant' | 'client' | 'super_admin'
 
+export interface InvoiceLineItem {
+  description: string
+  unit: string
+  quantity: number
+  unitPrice: number
+  amount: number
+  vatRate: string
+}
+
+export interface Invoice {
+  id: string
+  company_id: string
+  direction: 'incoming' | 'outgoing'
+  invoice_number: string | null
+  invoice_series: string | null
+  invoice_date: string | null
+  seller_name: string | null
+  seller_mst: string | null
+  buyer_name: string | null
+  buyer_mst: string | null
+  subtotal: number
+  vat_amount: number
+  total: number
+  vat_rate: string | null
+  line_items: InvoiceLineItem[]
+  file_path: string | null
+  file_name: string | null
+  source_format: 'pdf' | 'xml' | 'html' | null
+  status: 'pending' | 'matched' | 'posted'
+  transaction_id: string | null
+  suggested_account_code: string | null
+  notes: string | null
+  created_at: string
+}
+
+export interface JournalEntry {
+  id: string
+  company_id: string
+  date: string
+  description: string
+  type: 'closing' | 'adjustment' | 'accrual' | 'invoice'
+  debit_account: string
+  credit_account: string
+  amount: number
+  vat_debit_account: string | null
+  vat_credit_account: string | null
+  vat_amount: number
+  invoice_id: string | null
+  notes: string | null
+  status: 'draft' | 'posted'
+  created_at: string
+}
+
 export interface Invitation {
   id: string
   email: string | null
@@ -198,17 +251,6 @@ export interface QuarterClosing {
   quarter: number
   stages: QuarterClosingStages
   closed_at: string | null
-  created_at: string
-}
-
-export interface JournalEntry {
-  id: string
-  company_id: string
-  date: string
-  description: string | null
-  debit_account: string
-  credit_account: string
-  amount: number
   created_at: string
 }
 
