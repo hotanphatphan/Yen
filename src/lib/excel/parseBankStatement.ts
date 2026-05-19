@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx'
+import { supabase } from '../supabase'
 
 export interface ParsedBankRow {
   date: string
@@ -67,53 +68,25 @@ function applyMapping(rows: unknown[][], mapping: ColumnMapping): ParsedBankRow[
   return results
 }
 
-// Gemini-powered: detect column mapping from raw sheet data
+// Gemini-powered: detect column mapping via Supabase Edge Function
 export async function parseBankStatementWithGemini(buffer: ArrayBuffer): Promise<ParsedBankRow[]> {
-  const GEMINI_API_KEY = (import.meta as { env: Record<string, string> }).env.VITE_GEMINI_API_KEY
   const wb = XLSX.read(buffer, { type: 'array', codepage: 1258 })
   const ws = wb.Sheets[wb.SheetNames[0]]
   const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1 }) as unknown[][]
 
   if (rows.length < 2) return []
 
-  // Send first 30 rows to Gemini to identify column structure
-  const preview = rows.slice(0, 30).map((row, i) =>
+  const sheetPreview = rows.slice(0, 30).map((row, i) =>
     `Row ${i}: ${(row as unknown[]).map((c, j) => `[${j}]${String(c ?? '').slice(0, 40)}`).join(' | ')}`
   ).join('\n')
 
-  const prompt = `Đây là dữ liệu từ file sao kê ngân hàng Việt Nam (30 dòng đầu):
+  const { data, error } = await supabase.functions.invoke('parse-bank-statement', {
+    body: { sheetPreview },
+  })
 
-${preview}
+  if (error) throw new Error(`Edge function error: ${error.message}`)
+  if (data?.error) throw new Error(`Gemini error: ${data.error}`)
 
-Hãy xác định:
-1. headerRowIdx: chỉ số dòng (0-based) chứa tiêu đề cột của bảng giao dịch (không phải dòng thông tin ngân hàng ở đầu file)
-2. dateCol: chỉ số cột chứa ngày giao dịch
-3. descCol: chỉ số cột chứa mô tả/diễn giải giao dịch
-4. creditCol: chỉ số cột "ghi có" / tiền vào (số dương), -1 nếu không có
-5. debitCol: chỉ số cột "ghi nợ" / tiền ra (số dương, sẽ được chuyển thành âm), -1 nếu không có
-6. amountCol: chỉ số cột số tiền tổng hợp (nếu không tách Nợ/Có riêng), -1 nếu không có
-7. balanceCol: chỉ số cột số dư, -1 nếu không có
-
-Trả về JSON duy nhất, không thêm text khác:
-{"headerRowIdx": 0, "dateCol": 0, "descCol": 1, "creditCol": 2, "debitCol": 3, "amountCol": -1, "balanceCol": 4}`
-
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0, responseMimeType: 'application/json' },
-      }),
-    }
-  )
-
-  if (!response.ok) throw new Error(`Gemini API error: ${response.status}`)
-
-  const data = await response.json()
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}'
-  const mapping: ColumnMapping = JSON.parse(text)
-
+  const mapping: ColumnMapping = data.data
   return applyMapping(rows, mapping)
 }
