@@ -25,9 +25,7 @@ function parseDate(raw: unknown): string {
     return `${d.y}-${String(d.m).padStart(2, '0')}-${String(d.d).padStart(2, '0')}`
   }
   const s = String(raw).trim()
-  // yyyy-mm-dd or yyyy-mm-dd hh:mm:ss
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
-  // dd/mm/yyyy or dd-mm-yyyy
   const match = s.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/)
   if (match) return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`
   return s
@@ -61,7 +59,43 @@ function applyMapping(rows: unknown[][], mapping: ColumnMapping): ParsedBankRow[
   return results
 }
 
-// Gemini-powered: detect column mapping directly via Gemini API
+// Rule-based fallback: detect columns from Vietnamese/English header keywords
+function detectByRules(rows: unknown[][]): ColumnMapping | null {
+  const DATE_KEYS = ['ngày', 'date', 'ngay', 'ngày gd', 'ngày giao dịch', 'transaction date', 'posting date', 'value date']
+  const DESC_KEYS = ['diễn giải', 'nội dung', 'mô tả', 'ghi chú', 'description', 'detail', 'noi dung', 'mo ta', 'dien giai', 'tran description']
+  const CREDIT_KEYS = ['ghi có', 'tiền vào', 'credit', 'credits', 'ps co', 'phát sinh có', 'phat sinh co', 'ghi co']
+  const DEBIT_KEYS = ['ghi nợ', 'tiền ra', 'debit', 'debits', 'ps no', 'phát sinh nợ', 'phat sinh no', 'ghi no']
+  const AMOUNT_KEYS = ['số tiền', 'tiền', 'amount', 'so tien', 'tien', 'transaction amount']
+  const BALANCE_KEYS = ['số dư', 'dư cuối', 'balance', 'so du', 'du cuoi', 'ending balance', 'closing balance']
+
+  function match(cell: unknown, keys: string[]): boolean {
+    const v = String(cell ?? '').toLowerCase().trim()
+    return keys.some(k => v.includes(k))
+  }
+
+  for (let r = 0; r < Math.min(rows.length, 20); r++) {
+    const row = rows[r] as unknown[]
+    if (!row || row.length < 3) continue
+
+    let dateCol = -1, descCol = -1, creditCol = -1, debitCol = -1, amountCol = -1, balanceCol = -1
+
+    for (let c = 0; c < row.length; c++) {
+      if (dateCol < 0 && match(row[c], DATE_KEYS)) dateCol = c
+      else if (descCol < 0 && match(row[c], DESC_KEYS)) descCol = c
+      else if (creditCol < 0 && match(row[c], CREDIT_KEYS)) creditCol = c
+      else if (debitCol < 0 && match(row[c], DEBIT_KEYS)) debitCol = c
+      else if (amountCol < 0 && match(row[c], AMOUNT_KEYS)) amountCol = c
+      else if (balanceCol < 0 && match(row[c], BALANCE_KEYS)) balanceCol = c
+    }
+
+    // Need at least date + description + some amount column
+    if (dateCol >= 0 && descCol >= 0 && (creditCol >= 0 || debitCol >= 0 || amountCol >= 0)) {
+      return { headerRowIdx: r, dateCol, descCol, creditCol, debitCol, amountCol, balanceCol }
+    }
+  }
+  return null
+}
+
 export async function parseBankStatementWithGemini(buffer: ArrayBuffer): Promise<ParsedBankRow[]> {
   const wb = XLSX.read(buffer, { type: 'array', codepage: 1258 })
   const ws = wb.Sheets[wb.SheetNames[0]]
@@ -69,6 +103,15 @@ export async function parseBankStatementWithGemini(buffer: ArrayBuffer): Promise
 
   if (rows.length < 2) return []
 
+  // Try rule-based first (fast, no API needed)
+  const ruleMapping = detectByRules(rows)
+  if (ruleMapping) {
+    console.log('Bank statement: dùng rule-based detection', ruleMapping)
+    return applyMapping(rows, ruleMapping)
+  }
+
+  // Fall back to Gemini if rules couldn't detect
+  console.log('Bank statement: rule-based thất bại, thử Gemini...')
   const sheetPreview = rows.slice(0, 30).map((row, i) =>
     `Row ${i}: ${(row as unknown[]).map((c, j) => `[${j}]${String(c ?? '').slice(0, 40)}`).join(' | ')}`
   ).join('\n')
