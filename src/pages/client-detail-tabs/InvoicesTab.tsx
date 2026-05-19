@@ -10,13 +10,15 @@ import { supabase } from '@/lib/supabase'
 import { suggestAccounts, COMMON_ACCOUNTS } from '@/lib/accountSuggestion'
 import { cn } from '@/lib/utils'
 import type { Invoice } from '@/types'
+// Vite resolves this to the actual built asset URL at compile time
+import pdfjsWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 
 // ─── PDF text extraction ──────────────────────────────────────────────────────
 
 async function extractPdfText(buffer: ArrayBuffer): Promise<string> {
   const pdfjs = await import('pdfjs-dist')
-  pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
-  const pdf = await pdfjs.getDocument({ data: buffer }).promise
+  pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerSrc
+  const pdf = await pdfjs.getDocument({ data: new Uint8Array(buffer) }).promise
   const parts: string[] = []
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i)

@@ -191,83 +191,101 @@ function parsePdfText(text: string, companyMst: string) {
 
 // ─── HTML parser (VNPT e-invoice format) ─────────────────────────────────────
 
+// The amount in VNPT invoices is in the last <td> of the same <tr> as the label.
+// After stripping HTML, label and amount end up on the same line separated by spaces.
+// Strategy: find the last number on the same line as the keyword.
+function getLastNumberOnLine(text: string, keyword: string): number {
+  const idx = text.indexOf(keyword);
+  if (idx === -1) return 0;
+  const lineEnd = text.indexOf("\n", idx);
+  const line = text.slice(idx, lineEnd === -1 ? undefined : lineEnd);
+  const nums = [...line.matchAll(/\d[\d.,]*/g)];
+  if (nums.length === 0) return 0;
+  return parseNumber(nums[nums.length - 1][0]);
+}
+
 function parseHtml(html: string, companyMst: string) {
-  // Extract seller name from <b> tag before stripping HTML
+  // Extract seller name from <b> tag before stripping (it's the company name in bold)
   const boldMatch = html.match(/<b[^>]*>([^<]{5,})<\/b>/i);
   const sellerNameFromBold = boldMatch ? boldMatch[1].trim() : null;
 
-  // Strip style/script blocks
+  // Strip style/script blocks first to avoid false matches
   const clean = html
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
 
-  // Convert to plain text preserving structure
+  // Convert to plain text: each <tr> becomes a line, each <td> adds a space
   const text = clean
-    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, " ")
     .replace(/<\/tr>/gi, "\n")
     .replace(/<\/td>/gi, " ")
     .replace(/<\/th>/gi, " ")
     .replace(/<[^>]+>/g, "")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
-    .replace(/\s{2,}/g, " ")
-    .replace(/ \n/g, "\n");
+    .replace(/[ \t]{2,}/g, " ")   // collapse horizontal whitespace only
+    .replace(/ \n/g, "\n")
+    .replace(/\n{2,}/g, "\n");
 
-  // ── Series & Number from VNPT format: "(Serial No.) : 1C26MFO ... (No.) : 00013654" ──
+  // ── Series & Number ──
+  // VNPT format: "(Serial No.) : 1C26MFO   (No.) : 00013654" — all on one line
   let invoiceSeries: string | null = null;
   let invoiceNumber: string | null = null;
-  const snMatch = text.match(/\(Serial No\.\)\s*[:\s]+([A-Z0-9]+)/i) ??
-                  text.match(/Ký hiệu[^:]*:\s*([A-Z0-9]+)/i);
-  if (snMatch) invoiceSeries = snMatch[1].trim();
 
-  const numMatch = text.match(/\(No\.\)\s*[:\s]+0*(\d+)/i) ??
-                   text.match(/Số[^:]*:\s*0*(\d+)/i);
-  if (numMatch) invoiceNumber = numMatch[1].trim();
+  const serialMatch = text.match(/Serial No[.)]+\s*[: ]+([A-Z0-9]+)/i);
+  if (serialMatch) invoiceSeries = serialMatch[1].trim();
+  else {
+    const khMatch = text.match(/K[yý] hi[eệ]u\s*[:(]+\s*([A-Z0-9]+)/i);
+    if (khMatch) invoiceSeries = khMatch[1].trim();
+  }
 
-  // ── Date: "(Date) : 13/ 04/ 2026" → DD/MM/YYYY ──
+  const noMatch = text.match(/\(No[.)]+\s*[: ]+0*(\d+)/i);
+  if (noMatch) invoiceNumber = noMatch[1].trim();
+  else {
+    // fallback: first long digit sequence after series
+    const numFallback = text.match(/S[oố]\s*[:(]+\s*0*(\d{5,})/i);
+    if (numFallback) invoiceNumber = numFallback[1].trim();
+  }
+
+  // ── Date: "(Date) : 13/ 04/ 2026" ──
   let invoiceDate: string | null = null;
-  const dateMatch = text.match(/\(Date\)\s*[:\s]+(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{4})/i);
+  const dateMatch = text.match(/\(Date\)[^0-9]*(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{4})/i);
   if (dateMatch) {
     invoiceDate = `${dateMatch[3]}-${dateMatch[2].padStart(2, "0")}-${dateMatch[1].padStart(2, "0")}`;
   } else {
-    // Fallback: "Ngày DD tháng MM năm YYYY"
-    const d2 = text.match(/Ngày\s+(\d{1,2})\s+tháng\s+(\d{1,2})\s+năm\s+(\d{4})/i);
+    const d2 = text.match(/Ng[aà]y\s+(\d{1,2})\s+th[aá]ng\s+(\d{1,2})\s+n[aă]m\s+(\d{4})/i);
     if (d2) invoiceDate = `${d2[3]}-${d2[2].padStart(2, "0")}-${d2[1].padStart(2, "0")}`;
   }
 
-  // ── Seller / Buyer names ──
+  // ── Seller / Buyer ──
   const sellerName = sellerNameFromBold ??
-    text.match(/Đơn vị bán[^:]*[:\s]+([^\n]+)/i)?.[1]?.trim() ?? null;
+    text.match(/[ĐD][oơ]n v[iị] b[aá]n[^:]*[:\s]+([^\n]+)/i)?.[1]?.trim() ?? null;
   const buyerName =
-    text.match(/(?:Company's name|Tên đơn vị)[^:)]*[):\s]+([^\n]+?)(?:Căn|Mã|$)/i)?.[1]?.trim() ?? null;
+    text.match(/Company['']s name[^)]*[):\s]+([^\n]+?)(?:C[aă]n|M[aã]|$)/i)?.[1]?.trim() ??
+    text.match(/T[eê]n [dđ][oơ]n v[iị][^:]*:\s*([^\n]+)/i)?.[1]?.trim() ?? null;
 
-  // ── MST ──
+  // ── MST (tax code) — collect all occurrences in order ──
   const mstMatches: string[] = [];
-  const mstRe = /Mã số thuế[:\s]*([0-9-]{9,14})/gi;
-  let m;
+  const mstRe = /M[aã] s[oố] thu[eế][:\s]*([0-9]{9,14})/gi;
+  let m: RegExpExecArray | null;
   while ((m = mstRe.exec(text)) !== null) mstMatches.push(m[1].trim());
-  // Also catch "MST:XXXXXXXXXX" inline
-  const mstRe2 = /MST:([0-9-]{9,14})/gi;
-  while ((m = mstRe2.exec(text)) !== null) mstMatches.push(m[1].trim());
+  const mstInline = /MST[:\s]*([0-9]{9,14})/gi;
+  while ((m = mstInline.exec(text)) !== null) {
+    if (!mstMatches.includes(m[1].trim())) mstMatches.push(m[1].trim());
+  }
   const sellerMst = mstMatches[0] ?? null;
   const buyerMst = mstMatches[1] ?? null;
 
-  // ── Amounts (VNPT hotel format): each amount on its own line ──
-  const subtotal = parseNumber(
-    text.match(/Cộng tiền hàng[^\n]*\n\s*([\d.,]+)/i)?.[1] ??
-    text.match(/Cộng tiền hàng\s+([\d.,]+)/i)?.[1] ?? "0"
-  );
-  const vatAmount = parseNumber(
-    text.match(/Tiền thuế GTGT[^\n]*\n[^\n]*\n\s*([\d.,]+)/i)?.[1] ??
-    text.match(/Tiền thuế GTGT[^\n]*\n\s*([\d.,]+)/i)?.[1] ??
-    text.match(/Tiền thuế GTGT[^0-9]+([\d.,]+)/i)?.[1] ?? "0"
-  );
-  const total = parseNumber(
-    text.match(/Tổng cộng tiền thanh toán[^\n]*\n\s*([\d.,]+)/i)?.[1] ??
-    text.match(/Tổng cộng tiền thanh toán\s+([\d.,]+)/i)?.[1] ?? "0"
-  );
-  const vatRateMatch = text.match(/([\d]+%)\s*\(VAT amount\)/i) ??
-                       text.match(/Tiền thuế GTGT\s+([\d]+%)/i);
+  // ── Amounts ──
+  // The label and its amount are on the same <tr> line after stripping.
+  // getLastNumberOnLine picks the rightmost number on that line (the amount cell).
+  const subtotal = getLastNumberOnLine(text, "Cộng tiền hàng");
+  const vatAmount = getLastNumberOnLine(text, "Tiền thuế GTGT");
+  const total = getLastNumberOnLine(text, "Tổng cộng tiền thanh toán");
+
+  // VAT rate: find "8%" or "10%" near "VAT amount" or "GTGT"
+  const vatRateMatch = text.match(/(\d+%)\s*\(?VAT amount/i) ??
+                       text.match(/GTGT[^0-9]*(\d+%)/i);
   const vatRate = vatRateMatch?.[1] ?? "";
 
   return {
