@@ -253,6 +253,14 @@ export default function InvoicesTab({ companyId, companyMst }: {
     },
   })
 
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('invoices').delete().eq('id', id)
+      if (error) throw error
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['invoices', companyId] }),
+  })
+
   const saveMutation = useMutation({
     mutationFn: async (parsed: ParsedInvoice) => {
       const { error } = await supabase.from('invoices').insert({
@@ -435,6 +443,13 @@ export default function InvoicesTab({ companyId, companyMst }: {
                       <button onClick={() => setExpandedId(expanded ? null : inv.id)}
                         className="text-slate-300 hover:text-slate-500">
                         {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                      </button>
+                      <button
+                        onClick={() => { if (confirm('Xóa hóa đơn này?')) deleteMutation.mutate(inv.id) }}
+                        className="text-slate-300 hover:text-red-400 transition-colors"
+                        title="Xóa hóa đơn"
+                      >
+                        <X className="h-3.5 w-3.5" />
                       </button>
                     </div>
                   </div>

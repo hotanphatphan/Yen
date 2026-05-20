@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Users, Calendar, LogOut, ChevronRight, Menu, X, FileText } from 'lucide-react'
+import { LayoutDashboard, Users, Calendar, LogOut, ChevronRight, Menu, X } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { cn } from '@/lib/utils'
 
@@ -21,7 +21,6 @@ export function AccountantLayout({ children }: AccountantLayoutProps) {
   const navItems = [
     { to: '/dashboard', label: 'Tổng quan', icon: LayoutDashboard },
     { to: '/clients', label: 'Khách hàng', icon: Users },
-    { to: '/invoices', label: 'Hóa đơn', icon: FileText },
     { to: '/calendar', label: 'Lịch deadline', icon: Calendar },
   ]
 
