@@ -52,8 +52,8 @@ const STATUS_CONFIG = {
     label: 'Sẵn sàng',
   },
   complete: {
-    dot: 'bg-indigo-500',
-    badge: 'bg-indigo-100 text-indigo-700',
+    dot: 'bg-violet-500',
+    badge: 'bg-violet-100 text-violet-700',
     label: 'Hoàn tất',
   },
 }
@@ -150,10 +150,10 @@ export default function DashboardPage() {
       count: complete.length,
       description: 'Tất cả compliance đã xong',
       icon: CheckCircle2,
-      iconBg: 'bg-indigo-100',
-      iconColor: 'text-indigo-500',
-      numberColor: 'text-indigo-600',
-      border: 'border-l-4 border-l-indigo-400',
+      iconBg: 'bg-violet-100',
+      iconColor: 'text-violet-500',
+      numberColor: 'text-violet-600',
+      border: 'border-l-4 border-l-violet-400',
       items: complete,
     },
   ]
@@ -165,7 +165,7 @@ export default function DashboardPage() {
       <div className="p-6 space-y-6">
 
         {/* Hero Banner */}
-        <div className="relative rounded-2xl overflow-hidden" style={{ background: 'linear-gradient(135deg, #4F46E5 0%, #7C3AED 55%, #9333EA 100%)' }}>
+        <div className="relative rounded-2xl overflow-hidden" style={{ background: 'linear-gradient(135deg, #6D28D9 0%, #7C3AED 55%, #9333EA 100%)' }}>
           {/* Decorative blobs */}
           <div className="absolute -top-10 -right-10 h-48 w-48 rounded-full opacity-20" style={{ background: 'radial-gradient(circle, #A78BFA, transparent)' }} />
           <div className="absolute bottom-0 left-1/3 h-32 w-32 rounded-full opacity-10" style={{ background: 'radial-gradient(circle, #60A5FA, transparent)' }} />
@@ -176,7 +176,7 @@ export default function DashboardPage() {
 
           <div className="relative z-10 p-6 flex items-center justify-between">
             <div>
-              <p className="text-indigo-200 text-sm font-medium mb-1">{getGreeting()}, {profile?.full_name?.split(' ').pop() ?? 'bạn'} 👋</p>
+              <p className="text-violet-200 text-sm font-medium mb-1">{getGreeting()}, {profile?.full_name?.split(' ').pop() ?? 'bạn'} 👋</p>
               <h1 className="text-white text-2xl font-bold mb-3">Tổng quan hôm nay</h1>
               <div className="flex items-center gap-4">
                 <div className="text-center">
@@ -199,7 +199,7 @@ export default function DashboardPage() {
               <div className="h-16 w-16 rounded-2xl flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(8px)' }}>
                 <span className="text-3xl font-black text-white/90">Y</span>
               </div>
-              <p className="text-indigo-200 text-xs text-center mt-1.5">{today}</p>
+              <p className="text-violet-200 text-xs text-center mt-1.5">{today}</p>
             </div>
           </div>
         </div>
@@ -227,7 +227,7 @@ export default function DashboardPage() {
                       <button
                         key={company.id}
                         onClick={() => navigate(`/clients/${company.id}`)}
-                        className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-indigo-600 transition-colors w-full text-left"
+                        className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-violet-600 transition-colors w-full text-left"
                       >
                         <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${card.iconColor.replace('text-', 'bg-')}`} />
                         <span className="truncate">{company.name}</span>
@@ -252,7 +252,7 @@ export default function DashboardPage() {
                   <CardTitle className="text-base">Tất cả khách hàng</CardTitle>
                   <button
                     onClick={() => navigate('/clients')}
-                    className="flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-700 font-medium transition-colors"
+                    className="flex items-center gap-1 text-xs text-violet-500 hover:text-violet-700 font-medium transition-colors"
                   >
                     Xem tất cả <ArrowRight className="h-3.5 w-3.5" />
                   </button>
@@ -263,15 +263,15 @@ export default function DashboardPage() {
                   <div className="text-center py-10">
                     {/* Inline empty state illustration */}
                     <svg className="mx-auto mb-3 h-16 w-16 opacity-20" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <circle cx="40" cy="40" r="38" stroke="#6366F1" strokeWidth="3"/>
-                      <circle cx="29" cy="33" r="8" stroke="#6366F1" strokeWidth="2.5"/>
-                      <circle cx="51" cy="33" r="8" stroke="#6366F1" strokeWidth="2.5"/>
-                      <path d="M15 62 Q29 50 40 54 Q51 58 65 62" stroke="#6366F1" strokeWidth="2.5" strokeLinecap="round"/>
+                      <circle cx="40" cy="40" r="38" stroke="#7C3AED" strokeWidth="3"/>
+                      <circle cx="29" cy="33" r="8" stroke="#7C3AED" strokeWidth="2.5"/>
+                      <circle cx="51" cy="33" r="8" stroke="#7C3AED" strokeWidth="2.5"/>
+                      <path d="M15 62 Q29 50 40 54 Q51 58 65 62" stroke="#7C3AED" strokeWidth="2.5" strokeLinecap="round"/>
                     </svg>
                     <p className="text-sm text-slate-400">Chưa có khách hàng. Thêm khách hàng đầu tiên.</p>
                     <button
                       onClick={() => navigate('/clients')}
-                      className="mt-2 text-sm text-indigo-500 hover:underline font-medium"
+                      className="mt-2 text-sm text-violet-500 hover:underline font-medium"
                     >
                       Thêm khách hàng →
                     </button>
@@ -284,7 +284,7 @@ export default function DashboardPage() {
                         <button
                           key={company.id}
                           onClick={() => navigate(`/clients/${company.id}`)}
-                          className="flex items-center justify-between w-full py-3 text-left hover:bg-slate-50 transition-colors px-2 rounded-xl group"
+                          className="flex items-center justify-between w-full py-3 text-left hover:bg-violet-50/50 transition-colors px-2 rounded-xl group"
                         >
                           <div className="flex items-center gap-3">
                             <div className="h-8 w-8 rounded-xl flex items-center justify-center text-xs font-bold text-white shrink-0"
@@ -292,7 +292,7 @@ export default function DashboardPage() {
                               {company.name.charAt(0).toUpperCase()}
                             </div>
                             <div>
-                              <p className="text-sm font-semibold text-slate-800 group-hover:text-indigo-600 transition-colors">{company.name}</p>
+                              <p className="text-sm font-semibold text-slate-800 group-hover:text-violet-600 transition-colors">{company.name}</p>
                               <p className="text-xs text-slate-400">MST: {company.mst}</p>
                             </div>
                           </div>
@@ -344,8 +344,8 @@ export default function DashboardPage() {
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm flex items-center gap-2">
-                  <div className="h-7 w-7 rounded-lg bg-indigo-100 flex items-center justify-center">
-                    <Bell className="h-4 w-4 text-indigo-500" />
+                  <div className="h-7 w-7 rounded-lg bg-violet-100 flex items-center justify-center">
+                    <Bell className="h-4 w-4 text-violet-500" />
                   </div>
                   Thông báo
                 </CardTitle>
@@ -356,7 +356,7 @@ export default function DashboardPage() {
                 ) : (
                   <div className="space-y-1">
                     {notifications.slice(0, 5).map((n: { id: string; title: string; content: string; read: boolean; created_at: string }) => (
-                      <div key={n.id} className={`p-2 rounded-xl text-xs ${n.read ? 'text-slate-400' : 'text-slate-700 font-medium bg-indigo-50/50'}`}>
+                      <div key={n.id} className={`p-2 rounded-xl text-xs ${n.read ? 'text-slate-400' : 'text-slate-700 font-medium bg-violet-50/50'}`}>
                         <p>{n.title}</p>
                         <p className="text-slate-400 text-xs mt-0.5">{formatDate(n.created_at)}</p>
                       </div>

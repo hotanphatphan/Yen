@@ -11,39 +11,39 @@
 
 @layer base {
   :root {
-    --background: 214 32% 97%;
-    --foreground: 222 47% 11%;
+    --background: 248 30% 97%;
+    --foreground: 250 25% 12%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card-foreground: 250 25% 12%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
+    --popover-foreground: 250 25% 12%;
 
-    --primary: 239 84% 67%;
+    --primary: 262 68% 58%;
     --primary-foreground: 0 0% 100%;
 
     --secondary: 43 96% 56%;
-    --secondary-foreground: 222 47% 11%;
+    --secondary-foreground: 250 25% 12%;
 
-    --muted: 214 32% 94%;
-    --muted-foreground: 215 16% 47%;
+    --muted: 248 25% 94%;
+    --muted-foreground: 250 10% 50%;
 
-    --accent: 239 84% 67%;
+    --accent: 262 68% 58%;
     --accent-foreground: 0 0% 100%;
 
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 239 84% 67%;
+    --border: 248 25% 90%;
+    --input: 248 25% 90%;
+    --ring: 262 68% 58%;
 
-    --dark: 222 47% 11%;
+    --dark: 250 25% 12%;
     --dark-foreground: 0 0% 100%;
-    --dark-muted: 215 20% 65%;
+    --dark-muted: 250 15% 65%;
 
-    --radius: 0.75rem;
+    --radius: 0.875rem;
   }
 }
 
@@ -85,25 +85,25 @@
 
   /* Hero gradient banner */
   .gradient-hero {
-    background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 50%, #9333EA 100%);
+    background: linear-gradient(135deg, #6D28D9 0%, #7C3AED 50%, #9333EA 100%);
   }
 
-  /* Sidebar dot pattern */
+  /* Sidebar dot pattern (light variant for white sidebar) */
   .sidebar-dots {
-    background-image: radial-gradient(circle, rgba(255,255,255,0.08) 1px, transparent 1px);
+    background-image: radial-gradient(circle, rgba(124, 58, 237, 0.06) 1px, transparent 1px);
     background-size: 20px 20px;
   }
 
-  /* Ambient glow blob */
+  /* Ambient glow blob (violet) */
   .sidebar-glow {
-    background: radial-gradient(ellipse at top right, rgba(99, 102, 241, 0.35) 0%, transparent 60%);
+    background: radial-gradient(ellipse at top right, rgba(139, 92, 246, 0.12) 0%, transparent 60%);
   }
 
   /* Card premium style */
   .card-premium {
     background: white;
     border-radius: 1rem;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.05), 0 4px 16px rgba(0,0,0,0.06);
+    box-shadow: 0 1px 3px rgba(124, 58, 237, 0.04), 0 4px 16px rgba(124, 58, 237, 0.08);
     border: none;
   }
 

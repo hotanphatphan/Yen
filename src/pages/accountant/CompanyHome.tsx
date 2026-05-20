@@ -160,7 +160,7 @@ export default function CompanyHome({ company, onNavigate }: Props) {
       {/* Period header */}
       <div className="flex items-center gap-3">
         <div className="h-10 w-10 rounded-xl flex items-center justify-center"
-          style={{ background: 'linear-gradient(135deg,#6366F1,#8B5CF6)' }}>
+          style={{ background: 'linear-gradient(135deg,#7C3AED,#9333EA)' }}>
           <span className="text-white font-bold text-sm">Q{quarter}</span>
         </div>
         <div>
@@ -243,7 +243,7 @@ export default function CompanyHome({ company, onNavigate }: Props) {
               key={key}
               onClick={() => onNavigate(key)}
               className="group bg-white rounded-2xl border border-slate-100 p-5 text-left
-                hover:border-indigo-200 hover:shadow-md transition-all duration-150"
+                hover:border-violet-200 hover:shadow-md transition-all duration-150"
             >
               <div className="flex items-start justify-between mb-4">
                 <div className={cn(
@@ -257,7 +257,7 @@ export default function CompanyHome({ company, onNavigate }: Props) {
                     {badge}
                   </span>
                 ) : (
-                  <ChevronRight className="h-4 w-4 text-slate-300 group-hover:text-indigo-400 transition-colors" />
+                  <ChevronRight className="h-4 w-4 text-slate-300 group-hover:text-violet-400 transition-colors" />
                 )}
               </div>
               <p className="font-semibold text-slate-700 text-sm leading-tight">{label}</p>
@@ -269,10 +269,10 @@ export default function CompanyHome({ company, onNavigate }: Props) {
 
       {/* Quick stats row */}
       {txs.length > 0 && (
-        <div className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-2xl p-5 text-white">
+        <div className="bg-gradient-to-r from-violet-600 to-purple-600 rounded-2xl p-5 text-white">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-indigo-200">Tổng giao dịch Q{quarter}</p>
+              <p className="text-sm font-medium text-violet-200">Tổng giao dịch Q{quarter}</p>
               <p className="text-2xl font-bold mt-1">{txs.length} giao dịch</p>
             </div>
             <button
@@ -285,13 +285,13 @@ export default function CompanyHome({ company, onNavigate }: Props) {
           </div>
           <div className="mt-4 grid grid-cols-2 gap-4">
             <div>
-              <p className="text-xs text-indigo-300">Thu</p>
+              <p className="text-xs text-violet-300">Thu</p>
               <p className="font-semibold text-sm font-mono">
                 {txs.filter(t => t.type === 'income').length} khoản
               </p>
             </div>
             <div>
-              <p className="text-xs text-indigo-300">Chi</p>
+              <p className="text-xs text-violet-300">Chi</p>
               <p className="font-semibold text-sm font-mono">
                 {txs.filter(t => t.type === 'expense').length} khoản
               </p>
