@@ -1,8 +1,18 @@
+// Safari < 16.4 polyfill: pdfjs v5 uses `for await` on ReadableStream internally
+if (typeof ReadableStream !== 'undefined' && !(Symbol.asyncIterator in ReadableStream.prototype)) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(ReadableStream.prototype as any)[Symbol.asyncIterator] = async function* (this: ReadableStream) {
+    const reader = this.getReader()
+    try { while (true) { const { done, value } = await reader.read(); if (done) return; yield value } }
+    finally { reader.releaseLock() }
+  }
+}
+
 import { useState, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Upload, FileText, X, CheckCircle2, ArrowDownCircle,
-  ArrowUpCircle, AlertCircle, BookOpen, ChevronDown, ChevronUp,
+  ArrowUpCircle, AlertCircle, BookOpen, ChevronDown, ChevronUp, Trash2,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/shared/Dialog'
 import { Button } from '@/components/shared/Button'
@@ -237,6 +247,7 @@ export default function InvoicesTab({ companyId, companyMst }: {
   const queryClient = useQueryClient()
   const [uploads, setUploads] = useState<UploadItem[]>([])
   const [dragging, setDragging] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [postingInvoice, setPostingInvoice] = useState<Invoice | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -254,12 +265,24 @@ export default function InvoicesTab({ companyId, companyMst }: {
   })
 
   const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const { error } = await supabase.from('invoices').delete().eq('id', id)
+    mutationFn: async (ids: string[]) => {
+      const { error } = await supabase.from('invoices').delete().in('id', ids)
       if (error) throw error
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['invoices', companyId] }),
+    onSuccess: () => {
+      setSelectedIds(new Set())
+      queryClient.invalidateQueries({ queryKey: ['invoices', companyId] })
+    },
   })
+
+  const toggleSelect = (id: string) => setSelectedIds(prev => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
+  const toggleAll = (ids: string[]) => setSelectedIds(prev =>
+    prev.size === ids.length ? new Set() : new Set(ids)
+  )
 
   const saveMutation = useMutation({
     mutationFn: async (parsed: ParsedInvoice) => {
@@ -379,10 +402,26 @@ export default function InvoicesTab({ companyId, companyMst }: {
       {/* Invoice list */}
       <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-slate-700">
-            Danh sách hóa đơn
-            <span className="ml-2 text-xs font-normal text-slate-400">({invoices.length})</span>
-          </h3>
+          <div className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              className="rounded"
+              checked={selectedIds.size > 0 && selectedIds.size === invoices.length}
+              onChange={() => toggleAll(invoices.map(i => i.id))}
+            />
+            <h3 className="text-sm font-semibold text-slate-700">
+              Danh sách hóa đơn
+              <span className="ml-2 text-xs font-normal text-slate-400">({invoices.length})</span>
+            </h3>
+            {selectedIds.size > 0 && (
+              <button
+                onClick={() => { if (confirm(`Xóa ${selectedIds.size} hóa đơn đã chọn?`)) deleteMutation.mutate([...selectedIds]) }}
+                className="flex items-center gap-1.5 px-3 py-1 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-medium rounded-lg border border-red-200 transition-colors"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Xóa {selectedIds.size} mục
+              </button>
+            )}
+          </div>
           <div className="flex gap-3 text-xs text-slate-500">
             <span className="flex items-center gap-1"><ArrowDownCircle className="h-3.5 w-3.5 text-orange-400" /> Mua vào</span>
             <span className="flex items-center gap-1"><ArrowUpCircle className="h-3.5 w-3.5 text-green-500" /> Bán ra</span>
@@ -401,6 +440,12 @@ export default function InvoicesTab({ companyId, companyMst }: {
               return (
                 <div key={inv.id}>
                   <div className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50 transition-colors">
+                    <input
+                      type="checkbox"
+                      className="rounded shrink-0"
+                      checked={selectedIds.has(inv.id)}
+                      onChange={() => toggleSelect(inv.id)}
+                    />
                     <div className="shrink-0">
                       {inv.direction === 'incoming'
                         ? <ArrowDownCircle className="h-4 w-4 text-orange-400" />
@@ -445,7 +490,7 @@ export default function InvoicesTab({ companyId, companyMst }: {
                         {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                       </button>
                       <button
-                        onClick={() => { if (confirm('Xóa hóa đơn này?')) deleteMutation.mutate(inv.id) }}
+                        onClick={() => { if (confirm('Xóa hóa đơn này?')) deleteMutation.mutate([inv.id]) }}
                         className="text-slate-300 hover:text-red-400 transition-colors"
                         title="Xóa hóa đơn"
                       >
