@@ -5,70 +5,57 @@ import { useCompany } from '@/hooks/useCompanies'
 import ComplianceTab from '../client-detail-tabs/ComplianceTab'
 import DocumentsTab from '../client-detail-tabs/DocumentsTab'
 import LedgerTab from '../client-detail-tabs/LedgerTab'
-import InvoiceWorkflowTab from '../client-detail-tabs/InvoiceWorkflowTab'
 import BankReconciliationTab from '../client-detail-tabs/BankReconciliationTab'
 import ChartOfAccountsTab from '../client-detail-tabs/ChartOfAccountsTab'
 import VATTab from '../client-detail-tabs/VATTab'
 import BCTCTab from '../client-detail-tabs/BCTCTab'
-import FinancialSnapshotTab from '../client-detail-tabs/FinancialSnapshotTab'
-import QuarterClosingTab from '../client-detail-tabs/QuarterClosingTab'
 import InvoicesTab from '../client-detail-tabs/InvoicesTab'
+import InvoiceWorkflowTab from '../client-detail-tabs/InvoiceWorkflowTab'
+import CompanyHome from './CompanyHome'
 import {
-  ShieldCheck, TrendingUp, FileText, ArrowLeftRight, Landmark,
-  Percent, BarChart3, FolderOpen, BookOpen, FilePlus, CalendarCheck
+  LayoutDashboard, FileText, CreditCard, Landmark,
+  ReceiptText, ShieldCheck, FolderOpen, Settings2,
 } from 'lucide-react'
+import { cn } from '@/lib/utils'
+
+type TabKey = 'home' | 'parsed-invoices' | 'ledger' | 'bank' | 'tax-reports' | 'compliance' | 'documents' | 'settings'
+type TaxSub = 'vat' | 'bctc'
+type SettingsSub = 'documents-inner' | 'accounts' | 'invoice-template'
 
 const NAV_GROUPS = [
   {
-    label: 'Tổng quan',
-    iconBg: 'bg-violet-100',
-    iconColor: 'text-violet-600',
+    label: 'Workflow',
     items: [
-      { value: 'compliance', label: 'Tuân thủ', icon: ShieldCheck },
-      { value: 'snapshot', label: 'Tài chính', icon: TrendingUp },
+      { value: 'home' as TabKey,           label: 'Tổng quan',      icon: LayoutDashboard, iconBg: 'bg-violet-100', iconColor: 'text-violet-600' },
+      { value: 'parsed-invoices' as TabKey, label: 'Hóa đơn',        icon: FileText,        iconBg: 'bg-blue-100',   iconColor: 'text-blue-600'   },
+      { value: 'ledger' as TabKey,          label: 'Giao dịch',      icon: CreditCard,      iconBg: 'bg-cyan-100',   iconColor: 'text-cyan-600'   },
+      { value: 'bank' as TabKey,            label: 'Ngân hàng',      icon: Landmark,        iconBg: 'bg-teal-100',   iconColor: 'text-teal-600'   },
+      { value: 'tax-reports' as TabKey,     label: 'Thuế & Báo cáo', icon: ReceiptText,     iconBg: 'bg-amber-100',  iconColor: 'text-amber-600'  },
     ],
   },
   {
-    label: 'Nghiệp vụ',
-    iconBg: 'bg-blue-100',
-    iconColor: 'text-blue-600',
+    label: 'Quản lý',
     items: [
-      { value: 'parsed-invoices', label: 'Hóa đơn', icon: FileText },
-      { value: 'ledger', label: 'Giao dịch', icon: ArrowLeftRight },
-      { value: 'bank', label: 'Ngân hàng', icon: Landmark },
-    ],
-  },
-  {
-    label: 'Báo cáo',
-    iconBg: 'bg-amber-100',
-    iconColor: 'text-amber-600',
-    items: [
-      { value: 'vat', label: 'VAT', icon: Percent },
-      { value: 'bctc', label: 'Báo cáo TC', icon: BarChart3 },
-    ],
-  },
-  {
-    label: 'Hệ thống',
-    iconBg: 'bg-slate-100',
-    iconColor: 'text-slate-500',
-    items: [
-      { value: 'documents', label: 'Chứng từ', icon: FolderOpen },
-      { value: 'accounts', label: 'Hệ thống TK', icon: BookOpen },
-      { value: 'invoice', label: 'Mẫu hóa đơn', icon: FilePlus },
-      { value: 'closing', label: 'Đóng quý', icon: CalendarCheck },
+      { value: 'compliance' as TabKey, label: 'Tuân thủ',   icon: ShieldCheck, iconBg: 'bg-red-100',   iconColor: 'text-red-500'   },
+      { value: 'documents' as TabKey,  label: 'Chứng từ',   icon: FolderOpen,  iconBg: 'bg-green-100', iconColor: 'text-green-600' },
+      { value: 'settings' as TabKey,   label: 'Cài đặt',    icon: Settings2,   iconBg: 'bg-slate-100', iconColor: 'text-slate-500' },
     ],
   },
 ]
 
+const ALL_ITEMS = NAV_GROUPS.flatMap(g => g.items)
+
 export default function ClientDetailPage() {
   const { companyId } = useParams<{ companyId: string }>()
   const { data: company, isLoading } = useCompany(companyId)
-  const [active, setActive] = useState('compliance')
+  const [active, setActive] = useState<TabKey>('home')
+  const [taxSub, setTaxSub] = useState<TaxSub>('vat')
+  const [settingsSub, setSettingsSub] = useState<SettingsSub>('documents-inner')
 
   if (isLoading) {
     return (
       <AccountantLayout>
-        <div className="flex items-center justify-center h-64 text-gray-400">Đang tải...</div>
+        <div className="flex items-center justify-center h-64 text-slate-400">Đang tải...</div>
       </AccountantLayout>
     )
   }
@@ -76,7 +63,7 @@ export default function ClientDetailPage() {
   if (!company) {
     return (
       <AccountantLayout>
-        <div className="flex items-center justify-center h-64 text-gray-400">Không tìm thấy khách hàng</div>
+        <div className="flex items-center justify-center h-64 text-slate-400">Không tìm thấy khách hàng</div>
       </AccountantLayout>
     )
   }
@@ -92,23 +79,21 @@ export default function ClientDetailPage() {
         ]}
       />
 
-      {/* Mobile horizontal scroll tabs */}
+      {/* Mobile pill tabs */}
       <div className="sm:hidden border-b border-violet-100 bg-white px-3 py-2 overflow-x-auto">
         <div className="flex gap-1.5 w-max">
-          {NAV_GROUPS.flatMap(group => group.items).map(({ value, label, icon: Icon }) => {
+          {ALL_ITEMS.map(({ value, label, icon: Icon, iconColor }) => {
             const isActive = active === value
-            const group = NAV_GROUPS.find(g => g.items.some(i => i.value === value))!
             return (
               <button
                 key={value}
                 onClick={() => setActive(value)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all
-                  ${isActive
-                    ? 'bg-violet-600 text-white shadow-sm'
-                    : 'bg-violet-50 text-slate-500 hover:bg-violet-100'
-                  }`}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all',
+                  isActive ? 'bg-violet-600 text-white shadow-sm' : 'bg-violet-50 text-slate-500 hover:bg-violet-100'
+                )}
               >
-                <Icon size={12} className={isActive ? 'text-white' : group.iconColor} />
+                <Icon size={12} className={isActive ? 'text-white' : iconColor} />
                 {label}
               </button>
             )
@@ -118,28 +103,28 @@ export default function ClientDetailPage() {
 
       <div className="flex min-h-0 flex-1">
         {/* Desktop inner sidebar */}
-        <aside className="hidden sm:block w-48 shrink-0 border-r border-violet-100/80 bg-white/60 px-3 py-4 space-y-5">
+        <aside className="hidden sm:flex flex-col w-48 shrink-0 border-r border-violet-100/80 bg-white/60 px-3 py-4 space-y-5">
           {NAV_GROUPS.map((group) => (
             <div key={group.label}>
               <p className="px-2 mb-1 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
                 {group.label}
               </p>
               <ul className="space-y-0.5">
-                {group.items.map(({ value, label, icon: Icon }) => {
+                {group.items.map(({ value, label, icon: Icon, iconBg, iconColor }) => {
                   const isActive = active === value
                   return (
                     <li key={value}>
                       <button
                         onClick={() => setActive(value)}
-                        className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-xl text-sm transition-all
-                          ${isActive
+                        className={cn(
+                          'w-full flex items-center gap-2.5 px-2 py-1.5 rounded-xl text-sm transition-all',
+                          isActive
                             ? 'bg-white shadow-sm text-violet-700 font-semibold border border-violet-100'
                             : 'text-slate-500 hover:bg-violet-50 hover:text-violet-700'
-                          }`}
+                        )}
                       >
-                        <span className={`h-6 w-6 rounded-lg flex items-center justify-center shrink-0 transition-all
-                          ${isActive ? 'bg-violet-100' : group.iconBg}`}>
-                          <Icon size={13} className={isActive ? 'text-violet-600' : group.iconColor} />
+                        <span className={cn('h-6 w-6 rounded-lg flex items-center justify-center shrink-0', isActive ? 'bg-violet-100' : iconBg)}>
+                          <Icon size={13} className={isActive ? 'text-violet-600' : iconColor} />
                         </span>
                         {label}
                       </button>
@@ -152,18 +137,96 @@ export default function ClientDetailPage() {
         </aside>
 
         {/* Content */}
-        <main className="flex-1 min-w-0 p-6 overflow-auto">
-          {active === 'compliance' && <ComplianceTab companyId={company.id} />}
-          {active === 'snapshot' && <FinancialSnapshotTab companyId={company.id} />}
-          {active === 'parsed-invoices' && <InvoicesTab companyId={company.id} companyMst={company.mst} />}
-          {active === 'ledger' && <LedgerTab companyId={company.id} />}
-          {active === 'bank' && <BankReconciliationTab companyId={company.id} />}
-          {active === 'vat' && <VATTab companyId={company.id} />}
-          {active === 'bctc' && <BCTCTab companyId={company.id} />}
-          {active === 'documents' && <DocumentsTab companyId={company.id} />}
-          {active === 'accounts' && <ChartOfAccountsTab companyId={company.id} />}
-          {active === 'invoice' && <InvoiceWorkflowTab companyId={company.id} />}
-          {active === 'closing' && <QuarterClosingTab companyId={company.id} />}
+        <main className="flex-1 min-w-0 overflow-auto">
+
+          {active === 'home' && (
+            <CompanyHome company={company} onNavigate={setActive} />
+          )}
+
+          {active === 'parsed-invoices' && (
+            <div className="p-6">
+              <InvoicesTab companyId={company.id} companyMst={company.mst} />
+            </div>
+          )}
+
+          {active === 'ledger' && (
+            <div className="p-6">
+              <LedgerTab companyId={company.id} />
+            </div>
+          )}
+
+          {active === 'bank' && (
+            <div className="p-6">
+              <BankReconciliationTab companyId={company.id} />
+            </div>
+          )}
+
+          {active === 'tax-reports' && (
+            <div className="p-6 space-y-5">
+              {/* Sub-nav */}
+              <div className="flex gap-2">
+                {([
+                  { key: 'vat' as TaxSub, label: 'Kê khai VAT' },
+                  { key: 'bctc' as TaxSub, label: 'Báo cáo tài chính' },
+                ] as const).map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => setTaxSub(key)}
+                    className={cn(
+                      'px-4 py-1.5 rounded-xl text-sm font-medium transition-all',
+                      taxSub === key
+                        ? 'bg-violet-600 text-white shadow-sm'
+                        : 'bg-violet-50 text-slate-500 hover:bg-violet-100'
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {taxSub === 'vat' && <VATTab companyId={company.id} />}
+              {taxSub === 'bctc' && <BCTCTab companyId={company.id} />}
+            </div>
+          )}
+
+          {active === 'compliance' && (
+            <div className="p-6">
+              <ComplianceTab companyId={company.id} />
+            </div>
+          )}
+
+          {active === 'documents' && (
+            <div className="p-6">
+              <DocumentsTab companyId={company.id} />
+            </div>
+          )}
+
+          {active === 'settings' && (
+            <div className="p-6 space-y-5">
+              {/* Sub-nav */}
+              <div className="flex gap-2 flex-wrap">
+                {([
+                  { key: 'accounts' as SettingsSub, label: 'Hệ thống TK' },
+                  { key: 'invoice-template' as SettingsSub, label: 'Mẫu hóa đơn' },
+                ] as const).map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => setSettingsSub(key)}
+                    className={cn(
+                      'px-4 py-1.5 rounded-xl text-sm font-medium transition-all',
+                      settingsSub === key
+                        ? 'bg-slate-700 text-white shadow-sm'
+                        : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {settingsSub === 'accounts' && <ChartOfAccountsTab companyId={company.id} />}
+              {settingsSub === 'invoice-template' && <InvoiceWorkflowTab companyId={company.id} />}
+            </div>
+          )}
+
         </main>
       </div>
     </AccountantLayout>
