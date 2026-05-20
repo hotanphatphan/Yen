@@ -17,6 +17,16 @@ function normalizeMst(raw: string): string {
   return raw.replace(/\s+/g, "").replace(/-+$/, "");
 }
 
+// Returns true only if the string looks like a real company / person name
+// (rejects base64 blobs, binary noise, certificate serial numbers, etc.)
+function looksLikeCompanyName(s: string | null): s is string {
+  if (!s || s.length < 3 || s.length > 150) return false;
+  const letterCount = (s.match(/[\p{L}]/gu) ?? []).length;
+  // At least 50% actual letters, and must contain at least one space or
+  // known company keyword — avoids accepting single-word cert serials
+  return letterCount / s.length >= 0.5 && /[\s,.]|công ty|company|chi nhánh|tnhh|jsc|llc|co\.|ltd/i.test(s);
+}
+
 // Extract all MST (tax codes) from text, in order of their appearance.
 // Handles both normal ("0319286258") and spaced-digit ("0 3 1 9 2 8 6 2 5 8") formats.
 function extractMstList(text: string): string[] {
@@ -306,30 +316,29 @@ function parsePdfText(text: string, companyMst: string) {
   const sellerLabelMatch = text.match(
     /[ĐD][oơ]n\s+v[iị]\s+b[aá]n(?:\s+h[aà]ng)?\s*(?:\([^)]+\))?\s*[:\s]+([^\n]{5,120}?)(?:\s{2,}M[aã]\s+s[oố]|\s{2,}MST\b|\s+Tax\s+[Cc]ode|\s+[ĐD][iị]a\s+ch[iỉ]|\s+Nh[aà]\s+h[aà]ng)/i
   );
-  if (sellerLabelMatch) sellerName = sellerLabelMatch[1].trim();
+  const p1 = sellerLabelMatch?.[1].trim() ?? null;
+  if (looksLikeCompanyName(p1)) sellerName = p1;
 
-  // Pattern 2: digital signature block — most reliable seller ID
-  // "Ký bởi: NAME  Ký ngày:" (IPOS, MISA)
-  // "Đã được ký điện tử bởi  NAME  Ngày:" (Bkav)
-  if (!sellerName || sellerName.length < 3) {
+  // Pattern 2: digital signature block — "Ký bởi: NAME  Ký ngày:" (IPOS, MISA)
+  // Only use if name passes validation (avoids base64 cert noise)
+  if (!sellerName) {
     const sigMatch =
       text.match(/K[yý]\s+b[oở]i\s*[:\s]+([^\n]{5,80}?)(?:\s+K[yý]\s+ng[aà]y)/i) ||
       text.match(/[ĐD][aã]\s+[dđ][uưừ][oợ]c\s+k[yý]\s+[dđ]i[eệ]n\s+t[uử]\s+b[oở]i\s+([^\n]{5,80}?)(?:\s+Ng[aà]y)/i);
-    if (sigMatch) sellerName = sigMatch[1].trim();
+    const p2 = sigMatch?.[1].trim() ?? null;
+    if (looksLikeCompanyName(p2)) sellerName = p2;
   }
 
-  // Pattern 3: MISA outgoing invoices — company name at start, no "Đơn vị bán hàng" label
-  // "CÔNG TY TNHH SPRINTWISE  Mã số thuế : 0319286258"
-  // Also handles "(Tax code)" between label and number: "Mã số thuế   (Tax code) : 0318417853"
-  if (!sellerName || sellerName.length < 3) {
+  // Pattern 3: MISA outgoing — company name at top before "Mã số thuế : 0319286258"
+  if (!sellerName) {
     const topCompanyMatch = text.match(
       /^([A-ZÀÁÂÃÈÉÊÌÍÒÓÔÕÙÚĂĐĨŨƠƯẠẢẤẦẨẪẬẮẰẲẴẶẸẺẼẾỀỂỄỆỈỊỌỎỐỒỔỖỘỚỜỞỠỢỤỦỨỪỬỮỰỲÝỶỸỴ][^\n]{4,80}?)\s+M[aã]\s+s[oố]\s+thu[eế]\s*(?:\([^)]+\))?\s*[:\s]+\d/i
     );
-    if (topCompanyMatch) sellerName = topCompanyMatch[1].trim();
+    const p3 = topCompanyMatch?.[1].trim() ?? null;
+    if (looksLikeCompanyName(p3)) sellerName = p3;
   }
 
   // Clean English translation suffix from seller name
-  // "CHI NHÁNH CÔNG TY ... IN HOSPITALITY  BRANCH OF IN HOSPITALITY CORPORATION"
   if (sellerName) {
     sellerName = sellerName
       .replace(/\s+(?:BRANCH OF|CO\.\s*LTD|CORPORATION|COMPANY|CO\.\,|INC\.?)\s.*$/i, "")
@@ -341,7 +350,8 @@ function parsePdfText(text: string, companyMst: string) {
   const buyerLabelMatch = text.match(
     /T[eê]n\s+[dđ][oơ]n\s+v[iị]\s*(?:\([^)]+\))?\s*[:\s]+([^\n]{5,80}?)(?:\s+[ĐD][iị]a\s+ch[iỉ]|\s+M[aã]\s+s[oố]|\s+MST|\s+C[aă]n\s+c[uướ]c)/i
   );
-  if (buyerLabelMatch) buyerName = buyerLabelMatch[1].trim();
+  const bRaw = buyerLabelMatch?.[1].trim() ?? null;
+  if (looksLikeCompanyName(bRaw)) buyerName = bRaw;
 
   return {
     invoiceNumber,
