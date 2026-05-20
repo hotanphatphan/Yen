@@ -15,15 +15,19 @@ const ACCOUNT_NAMES: Record<string, string> = {
   '111': 'Tiền mặt',
   '112': 'Tiền gửi ngân hàng',
   '131': 'Phải thu khách hàng',
+  '1331': 'Thuế GTGT đầu vào được khấu trừ',
   '133': 'Thuế GTGT được khấu trừ',
   '152': 'Nguyên vật liệu',
   '153': 'Công cụ dụng cụ',
   '156': 'Hàng hóa',
   '211': 'Tài sản cố định',
   '331': 'Phải trả người bán',
+  '3311': 'Phải trả người bán trong nước',
   '511': 'Doanh thu bán hàng',
+  '5111': 'Doanh thu bán hàng hóa',
   '515': 'Doanh thu hoạt động tài chính',
   '3331': 'Thuế GTGT phải nộp',
+  '33311': 'Thuế GTGT đầu ra',
   '621': 'Chi phí nguyên vật liệu',
   '627': 'Chi phí sản xuất chung',
   '641': 'Chi phí bán hàng',
@@ -63,25 +67,27 @@ export function suggestAccounts(invoice: Invoice): AccountingSuggestion {
   const hasVat = invoice.vat_amount > 0
 
   if (invoice.direction === 'incoming') {
-    // Purchase invoice: expense + optional VAT input
+    // Purchase invoice (mua vào):
+    //   Nợ 641/642 (expense)  + Nợ 1331 (input VAT) / Có 331 (accounts payable)
     const expenseAccount = suggestExpenseAccount(invoice.seller_name ?? '')
     return {
       debitAccount: expenseAccount,
       debitAccountName: ACCOUNT_NAMES[expenseAccount] ?? expenseAccount,
-      creditAccount: '112',
-      creditAccountName: ACCOUNT_NAMES['112'],
-      vatDebitAccount: hasVat ? '133' : null,
-      vatCreditAccount: hasVat ? '112' : null,
+      creditAccount: '331',
+      creditAccountName: ACCOUNT_NAMES['331'],
+      vatDebitAccount: hasVat ? '1331' : null,
+      vatCreditAccount: hasVat ? '331' : null,
     }
   } else {
-    // Sale invoice: revenue + optional VAT output
+    // Sale invoice (bán ra):
+    //   Nợ 131 (receivable) / Có 511 (revenue) + Có 33311 (output VAT)
     return {
       debitAccount: '131',
       debitAccountName: ACCOUNT_NAMES['131'],
       creditAccount: '511',
       creditAccountName: ACCOUNT_NAMES['511'],
       vatDebitAccount: hasVat ? '131' : null,
-      vatCreditAccount: hasVat ? '3331' : null,
+      vatCreditAccount: hasVat ? '33311' : null,
     }
   }
 }

@@ -243,9 +243,9 @@ export default function ClosingEntriesTab({ companyId }: { companyId: string }) 
                   <td className="px-4 py-3">
                     <span className={cn(
                       'px-2 py-0.5 rounded-full text-xs border',
-                      TYPE_COLORS[entry.type] ?? 'bg-slate-50 text-slate-500 border-slate-200'
+                      TYPE_COLORS[entry.type ?? ''] ?? 'bg-slate-50 text-slate-500 border-slate-200'
                     )}>
-                      {TYPE_LABELS[entry.type] ?? entry.type}
+                      {TYPE_LABELS[entry.type ?? ''] ?? entry.type}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-center">
