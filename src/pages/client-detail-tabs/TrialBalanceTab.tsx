@@ -6,7 +6,6 @@ import { formatVND, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { DEFAULT_ACCOUNTS } from '@/lib/seeds/defaultAccounts'
 import type { JournalEntry } from '@/types'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/shared/Select'
 import { Input } from '@/components/shared/Input'
 import { VNDInput } from '@/components/shared/VNDInput'
 

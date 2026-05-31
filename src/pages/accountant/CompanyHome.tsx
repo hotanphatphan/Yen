@@ -13,7 +13,7 @@ import { formatVND, getCurrentQuarter } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import type { Company } from '@/types'
 
-type TabKey = 'home' | 'compliance' | 'parsed-invoices' | 'ledger' | 'bank' | 'tax-reports' | 'documents' | 'settings'
+type TabKey = 'home' | 'compliance' | 'parsed-invoices' | 'bank' | 'tax-reports' | 'documents' | 'settings'
 
 interface Props {
   company: Company
@@ -127,7 +127,7 @@ export default function CompanyHome({ company, onNavigate }: Props) {
       desc: pendingInvoices > 0 ? `${pendingInvoices} hóa đơn chờ hạch toán` : totalInvoices > 0 ? `${totalInvoices} hóa đơn đã nhập` : 'Upload và hạch toán hóa đơn',
     },
     {
-      num: 3, status: step3Status, tab: 'ledger' as TabKey,
+      num: 3, status: step3Status, tab: 'bank' as TabKey,
       icon: CreditCard, iconBg: 'bg-cyan-100', iconColor: 'text-cyan-600',
       label: 'Nhập giao dịch',
       desc: txs.length > 0 ? `${txs.length} giao dịch trong quý` : 'Chưa có giao dịch trong tháng',
