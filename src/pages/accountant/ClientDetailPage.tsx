@@ -4,22 +4,22 @@ import { AccountantLayout, PageHeader } from '@/components/shared/AccountantLayo
 import { useCompany } from '@/hooks/useCompanies'
 import ComplianceTab from '../client-detail-tabs/ComplianceTab'
 import DocumentsTab from '../client-detail-tabs/DocumentsTab'
-import LedgerTab from '../client-detail-tabs/LedgerTab'
 import BankReconciliationTab from '../client-detail-tabs/BankReconciliationTab'
 import ChartOfAccountsTab from '../client-detail-tabs/ChartOfAccountsTab'
 import VATTab from '../client-detail-tabs/VATTab'
 import BCTCTab from '../client-detail-tabs/BCTCTab'
 import InvoicesTab from '../client-detail-tabs/InvoicesTab'
 import InvoiceWorkflowTab from '../client-detail-tabs/InvoiceWorkflowTab'
+import TrialBalanceTab from '../client-detail-tabs/TrialBalanceTab'
 import CompanyHome from './CompanyHome'
 import {
-  LayoutDashboard, FileText, CreditCard, Landmark,
+  LayoutDashboard, FileText, Landmark,
   ReceiptText, ShieldCheck, FolderOpen, Settings2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-type TabKey = 'home' | 'parsed-invoices' | 'ledger' | 'bank' | 'tax-reports' | 'compliance' | 'documents' | 'settings'
-type TaxSub = 'vat' | 'bctc'
+type TabKey = 'home' | 'bank' | 'parsed-invoices' | 'tax-reports' | 'compliance' | 'documents' | 'settings'
+type TaxSub = 'vat' | 'bctc' | 'trial-balance'
 type SettingsSub = 'documents-inner' | 'accounts' | 'invoice-template'
 
 const NAV_GROUPS = [
@@ -27,9 +27,8 @@ const NAV_GROUPS = [
     label: 'Workflow',
     items: [
       { value: 'home' as TabKey,           label: 'Tổng quan',      icon: LayoutDashboard, iconBg: 'bg-violet-100', iconColor: 'text-violet-600' },
-      { value: 'parsed-invoices' as TabKey, label: 'Hóa đơn',        icon: FileText,        iconBg: 'bg-blue-100',   iconColor: 'text-blue-600'   },
-      { value: 'ledger' as TabKey,          label: 'Giao dịch',      icon: CreditCard,      iconBg: 'bg-cyan-100',   iconColor: 'text-cyan-600'   },
       { value: 'bank' as TabKey,            label: 'Ngân hàng',      icon: Landmark,        iconBg: 'bg-teal-100',   iconColor: 'text-teal-600'   },
+      { value: 'parsed-invoices' as TabKey, label: 'Hóa đơn',        icon: FileText,        iconBg: 'bg-blue-100',   iconColor: 'text-blue-600'   },
       { value: 'tax-reports' as TabKey,     label: 'Thuế & Báo cáo', icon: ReceiptText,     iconBg: 'bg-amber-100',  iconColor: 'text-amber-600'  },
     ],
   },
@@ -48,7 +47,7 @@ const ALL_ITEMS = NAV_GROUPS.flatMap(g => g.items)
 export default function ClientDetailPage() {
   const { companyId } = useParams<{ companyId: string }>()
   const { data: company, isLoading } = useCompany(companyId)
-  const [active, setActive] = useState<TabKey>('home')
+  const [active, setActive] = useState<TabKey>('bank')
   const [taxSub, setTaxSub] = useState<TaxSub>('vat')
   const [settingsSub, setSettingsSub] = useState<SettingsSub>('documents-inner')
 
@@ -143,31 +142,26 @@ export default function ClientDetailPage() {
             <CompanyHome company={company} onNavigate={setActive} />
           )}
 
-          {active === 'parsed-invoices' && (
-            <div className="p-6">
-              <InvoicesTab companyId={company.id} companyMst={company.mst} />
-            </div>
-          )}
-
-          {active === 'ledger' && (
-            <div className="p-6">
-              <LedgerTab companyId={company.id} />
-            </div>
-          )}
-
           {active === 'bank' && (
             <div className="p-6">
               <BankReconciliationTab companyId={company.id} />
             </div>
           )}
 
+          {active === 'parsed-invoices' && (
+            <div className="p-6">
+              <InvoicesTab companyId={company.id} companyMst={company.mst} />
+            </div>
+          )}
+
           {active === 'tax-reports' && (
             <div className="p-6 space-y-5">
               {/* Sub-nav */}
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 {([
                   { key: 'vat' as TaxSub, label: 'Kê khai VAT' },
                   { key: 'bctc' as TaxSub, label: 'Báo cáo tài chính' },
+                  { key: 'trial-balance' as TaxSub, label: 'Cân đối thử' },
                 ] as const).map(({ key, label }) => (
                   <button
                     key={key}
@@ -185,6 +179,7 @@ export default function ClientDetailPage() {
               </div>
               {taxSub === 'vat' && <VATTab companyId={company.id} />}
               {taxSub === 'bctc' && <BCTCTab companyId={company.id} />}
+              {taxSub === 'trial-balance' && <TrialBalanceTab companyId={company.id} />}
             </div>
           )}
 

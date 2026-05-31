@@ -1,28 +1,232 @@
-import { useState } from 'react'
-import { Upload, Link2, Plus, CheckCircle2, AlertCircle, XCircle } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Upload, Plus, CheckCircle2, AlertCircle, XCircle, Trash2, Pencil,
+  Landmark, ChevronDown, ChevronUp, Link2, Sparkles, Check } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/shared/Button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/shared/Card'
 import { Badge } from '@/components/shared/Badge'
+import { Input } from '@/components/shared/Input'
+import { Label } from '@/components/shared/Label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/shared/Select'
 import { supabase } from '@/lib/supabase'
 import { parseBankStatementWithGemini } from '@/lib/excel/parseBankStatement'
-import { useTransactions } from '@/hooks/useTransactions'
+import { autoMatchTransactions } from '@/lib/gemini'
+import type { BankTransaction, BankStatement, BankAccount, Invoice } from '@/types'
 import { formatDate, formatVND } from '@/lib/utils'
-import type { BankTransaction, BankStatement } from '@/types'
+import { COMMON_ACCOUNTS } from '@/lib/accountSuggestion'
+import { cn } from '@/lib/utils'
+import CashLedgerTab from './CashLedgerTab'
+import { SectionButToanDieuChinh } from './LedgerTab'
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface TxSuggestion {
+  bankTxId: string
+  matchedInvoiceId: string | null
+  matchedInvoiceName: string | null
+  matchedInvoiceNumber: string | null
+  debitAccount: string
+  creditAccount: string
+  vatAccount: string | null
+  confidence: number
+  reason: string
+  isIncome: boolean
+  customerName: string
+  outInvoiceNo: string
+}
 
 type ImportStatus = { type: 'success'; count: number; fileName: string } | { type: 'error'; message: string } | null
 
-export default function BankReconciliationTab({ companyId }: { companyId: string }) {
+// ─── Bank Accounts Section ────────────────────────────────────────────────────
+
+const BANK_OPTIONS = [
+  'Vietcombank', 'Techcombank', 'MB Bank', 'BIDV', 'Agribank',
+  'VPBank', 'ACB', 'Sacombank', 'TPBank', 'VietinBank', 'HDBank', 'SHB', 'Khác',
+]
+
+function BankAccountsSection({ companyId }: { companyId: string }) {
   const qc = useQueryClient()
+  const [showForm, setShowForm] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
+  const [form, setForm] = useState({ bank_name: '', account_number: '', account_name: '', account_code: '1121' })
+
+  const { data: accounts = [] } = useQuery({
+    queryKey: ['bank-accounts', companyId],
+    queryFn: async () => {
+      const { data } = await supabase.from('bank_accounts').select('*').eq('company_id', companyId).order('created_at')
+      return (data ?? []) as BankAccount[]
+    },
+  })
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      if (editId) {
+        await supabase.from('bank_accounts').update(form).eq('id', editId)
+      } else {
+        await supabase.from('bank_accounts').insert({ ...form, company_id: companyId })
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bank-accounts', companyId] })
+      setShowForm(false)
+      setEditId(null)
+      setForm({ bank_name: '', account_number: '', account_name: '', account_code: '1121' })
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await supabase.from('bank_accounts').delete().eq('id', id)
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['bank-accounts', companyId] }),
+  })
+
+  function startEdit(acct: BankAccount) {
+    setEditId(acct.id)
+    setForm({ bank_name: acct.bank_name, account_number: acct.account_number, account_name: acct.account_name ?? '', account_code: acct.account_code })
+    setShowForm(true)
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-slate-500">Quản lý các tài khoản ngân hàng của công ty</p>
+        <Button size="sm" onClick={() => { setShowForm(!showForm); setEditId(null); setForm({ bank_name: '', account_number: '', account_name: '', account_code: '1121' }) }}>
+          <Plus className="h-3.5 w-3.5" /> Thêm tài khoản
+        </Button>
+      </div>
+
+      {showForm && (
+        <Card className="border-indigo-200">
+          <CardContent className="pt-4 space-y-3">
+            <p className="text-sm font-semibold text-slate-700">{editId ? 'Sửa tài khoản' : 'Thêm tài khoản ngân hàng'}</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Ngân hàng</Label>
+                <select
+                  value={form.bank_name}
+                  onChange={e => setForm(f => ({ ...f, bank_name: e.target.value }))}
+                  className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                >
+                  <option value="">-- Chọn ngân hàng --</option>
+                  {BANK_OPTIONS.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>TK kế toán (VAS)</Label>
+                <select
+                  value={form.account_code}
+                  onChange={e => setForm(f => ({ ...f, account_code: e.target.value }))}
+                  className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                >
+                  <option value="1121">1121 — Tiền gửi VNĐ</option>
+                  <option value="1122">1122 — Tiền gửi ngoại tệ</option>
+                  <option value="1123">1123 — Tiền gửi vàng</option>
+                  <option value="112">112 — Tiền gửi NH (tổng hợp)</option>
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Số tài khoản</Label>
+                <Input value={form.account_number} onChange={e => setForm(f => ({ ...f, account_number: e.target.value }))} placeholder="0123456789" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Tên tài khoản</Label>
+                <Input value={form.account_name} onChange={e => setForm(f => ({ ...f, account_name: e.target.value }))} placeholder="Công ty TNHH ABC" />
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button variant="ghost" size="sm" onClick={() => { setShowForm(false); setEditId(null) }}>Hủy</Button>
+              <Button size="sm" onClick={() => saveMutation.mutate()} disabled={!form.bank_name || !form.account_number || saveMutation.isPending}>
+                {saveMutation.isPending ? 'Đang lưu...' : 'Lưu'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {accounts.length === 0 && !showForm && (
+        <Card>
+          <CardContent className="py-10 text-center text-slate-400 text-sm">
+            Chưa có tài khoản ngân hàng. Thêm tài khoản để bắt đầu import sao kê.
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="space-y-2">
+        {accounts.map(acct => (
+          <div key={acct.id} className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 bg-white hover:border-indigo-200 transition-colors">
+            <div className="h-9 w-9 rounded-lg bg-teal-50 flex items-center justify-center shrink-0">
+              <Landmark className="h-4.5 w-4.5 text-teal-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-slate-800 text-sm">{acct.bank_name}</p>
+              <p className="text-xs text-slate-500">{acct.account_number}{acct.account_name ? ` · ${acct.account_name}` : ''}</p>
+            </div>
+            <Badge variant="secondary" className="text-xs font-mono">{acct.account_code}</Badge>
+            <button onClick={() => startEdit(acct)} className="text-slate-300 hover:text-indigo-500 transition-colors">
+              <Pencil className="h-4 w-4" />
+            </button>
+            <button onClick={() => { if (confirm('Xóa tài khoản này?')) deleteMutation.mutate(acct.id) }} className="text-slate-300 hover:text-red-400 transition-colors">
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ─── Statement Section ────────────────────────────────────────────────────────
+
+function StatementsSection({ companyId }: { companyId: string }) {
+  const qc = useQueryClient()
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [parsing, setParsing] = useState(false)
   const [importStatus, setImportStatus] = useState<ImportStatus>(null)
-  const [matchingBankId, setMatchingBankId] = useState<string | null>(null)
+  const [selectedBankAccountId, setSelectedBankAccountId] = useState<string>('')
+  const [suggestions, setSuggestions] = useState<Map<string, TxSuggestion>>(new Map())
+  const [userEdits, setUserEdits] = useState<Map<string, Partial<TxSuggestion>>>(new Map())
+  const [selectedTxIds, setSelectedTxIds] = useState<Set<string>>(new Set())
+  const [editingTxId, setEditingTxId] = useState<string | null>(null)
+  const [editData, setEditData] = useState({ description: '', amount: '', date: '' })
+  const [confirming, setConfirming] = useState<Set<string>>(new Set())
+  const [showDone, setShowDone] = useState(false)
+  const [editingMatchedId, setEditingMatchedId] = useState<string | null>(null)
+  const [matchedEditForm, setMatchedEditForm] = useState({ debitAccount: '', creditAccount: '', description: '' })
+  const [matchedJournalId, setMatchedJournalId] = useState<string | null>(null)
 
-  const { data: statements = [] } = useQuery({
-    queryKey: ['bank-statements', companyId],
+  // Month close marker — stored in localStorage per company
+  const now = new Date()
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const m = String(now.getMonth() + 1).padStart(2, '0')
+    return `${now.getFullYear()}-${m}`
+  })
+  const closedMonthsKey = `closed-months-${companyId}`
+  const [closedMonths, setClosedMonths] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(closedMonthsKey) ?? '[]') } catch { return [] }
+  })
+  const isCurrentMonthClosed = closedMonths.includes(selectedMonth)
+
+  function toggleMonthClose() {
+    const next = isCurrentMonthClosed
+      ? closedMonths.filter(m => m !== selectedMonth)
+      : [...closedMonths, selectedMonth]
+    setClosedMonths(next)
+    localStorage.setItem(closedMonthsKey, JSON.stringify(next))
+  }
+
+  const monthOptions = Array.from({ length: 12 }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+    const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    const label = `Tháng ${d.getMonth() + 1}/${d.getFullYear()}`
+    return { val, label }
+  })
+
+  const { data: bankAccounts = [] } = useQuery({
+    queryKey: ['bank-accounts', companyId],
     queryFn: async () => {
-      const { data } = await supabase.from('bank_statements').select('*').eq('company_id', companyId).order('created_at', { ascending: false })
-      return (data ?? []) as BankStatement[]
+      const { data } = await supabase.from('bank_accounts').select('*').eq('company_id', companyId).order('created_at')
+      return (data ?? []) as BankAccount[]
     },
   })
 
@@ -34,44 +238,78 @@ export default function BankReconciliationTab({ companyId }: { companyId: string
     },
   })
 
-  const { data: ledgerTransactions = [] } = useTransactions(companyId, { status: 'official' })
-
-  const matchMutation = useMutation({
-    mutationFn: async ({ bankTxId, ledgerTxId }: { bankTxId: string; ledgerTxId: string }) => {
-      await supabase.from('bank_transactions')
-        .update({ matched_transaction_id: ledgerTxId, status: 'matched' })
-        .eq('id', bankTxId)
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['bank-transactions', companyId] })
-      setMatchingBankId(null)
+  const { data: pendingInvoices = [] } = useQuery({
+    queryKey: ['invoices', companyId, 'pending-for-match'],
+    queryFn: async () => {
+      const { data } = await supabase.from('invoices').select('*').eq('company_id', companyId).in('status', ['pending', 'matched'])
+      return (data ?? []) as Invoice[]
     },
   })
 
-  const createFromBankMutation = useMutation({
-    mutationFn: async (bankTx: BankTransaction) => {
-      const { data: tx } = await supabase.from('transactions').insert({
-        company_id: companyId,
-        date: bankTx.date,
-        type: bankTx.amount > 0 ? 'income' : 'expense',
-        amount: Math.abs(bankTx.amount),
-        vat_amount: 0,
-        description: bankTx.description,
-        status: 'official',
-        source: 'bank_import',
-        needs_review: false,
-      }).select().single()
-      if (tx) {
-        await supabase.from('bank_transactions')
-          .update({ matched_transaction_id: tx.id, status: 'matched' })
-          .eq('id', bankTx.id)
+  const selectedAccount = bankAccounts.find(a => a.id === selectedBankAccountId)
+
+  // Auto-run matching whenever transactions or invoices change
+  useEffect(() => {
+    const unmatched = bankTransactions.filter(t => t.status === 'unmatched')
+    if (unmatched.length === 0) return
+
+    const bankAccountCode = selectedAccount?.account_code ?? bankAccounts[0]?.account_code ?? '112'
+
+    const bankInputs = unmatched.map(bt => ({
+      id: bt.id,
+      date: bt.date,
+      description: bt.description,
+      amount: bt.amount,
+    }))
+
+    const invoiceInputs = pendingInvoices.map(inv => ({
+      id: inv.id,
+      date: inv.invoice_date ?? '',
+      vendor: inv.seller_name ?? '',
+      amount: inv.subtotal,
+      vat_amount: inv.vat_amount,
+      invoice_number: inv.invoice_number,
+      category: null,
+    }))
+
+    autoMatchTransactions(bankInputs, invoiceInputs, bankAccountCode).then(results => {
+      const map = new Map<string, TxSuggestion>()
+      for (const r of results) {
+        const bt = unmatched.find(t => t.id === r.bank_tx_id)
+        const matchedInvoice = r.invoice_id ? pendingInvoices.find(i => i.id === r.invoice_id) : null
+        map.set(r.bank_tx_id, {
+          bankTxId: r.bank_tx_id,
+          matchedInvoiceId: r.invoice_id,
+          matchedInvoiceName: matchedInvoice?.seller_name ?? null,
+          matchedInvoiceNumber: matchedInvoice?.invoice_number ?? null,
+          debitAccount: r.debit_account,
+          creditAccount: r.credit_account,
+          vatAccount: r.vat_account,
+          confidence: r.confidence,
+          reason: r.reason,
+          isIncome: (bt?.amount ?? 0) > 0,
+          customerName: '',
+          outInvoiceNo: '',
+        })
       }
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['bank-transactions', companyId] })
-      qc.invalidateQueries({ queryKey: ['transactions', companyId] })
-    },
-  })
+      setSuggestions(map)
+    })
+  }, [bankTransactions, pendingInvoices, selectedAccount, bankAccounts])
+
+  function getSuggestion(txId: string): TxSuggestion | undefined {
+    const base = suggestions.get(txId)
+    const edits = userEdits.get(txId)
+    if (!base) return undefined
+    return { ...base, ...edits }
+  }
+
+  function updateEdit(txId: string, patch: Partial<TxSuggestion>) {
+    setUserEdits(prev => {
+      const next = new Map(prev)
+      next.set(txId, { ...(next.get(txId) ?? {}), ...patch })
+      return next
+    })
+  }
 
   async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -79,12 +317,11 @@ export default function BankReconciliationTab({ companyId }: { companyId: string
     setParsing(true)
     setImportStatus(null)
     try {
-      const buffer = await file.arrayBuffer()
-      const rows = await parseBankStatementWithGemini(buffer)
-
+      const rows = await parseBankStatementWithGemini(file)
       const { data: stmt } = await supabase.from('bank_statements').insert({
         company_id: companyId,
         file_name: file.name,
+        bank_account_id: selectedBankAccountId || null,
       }).select().single()
 
       if (stmt && rows.length > 0) {
@@ -96,10 +333,10 @@ export default function BankReconciliationTab({ companyId }: { companyId: string
             description: r.description,
             amount: r.amount,
             balance: r.balance,
+            bank_account_id: selectedBankAccountId || null,
             status: 'unmatched',
           }))
         )
-        qc.invalidateQueries({ queryKey: ['bank-statements', companyId] })
         qc.invalidateQueries({ queryKey: ['bank-transactions', companyId] })
         setImportStatus({ type: 'success', count: rows.length, fileName: file.name })
       }
@@ -110,202 +347,632 @@ export default function BankReconciliationTab({ companyId }: { companyId: string
     e.target.value = ''
   }
 
-  const matched = bankTransactions.filter(t => t.status === 'matched')
+  async function confirmTx(bt: BankTransaction) {
+    const sg = getSuggestion(bt.id)
+    if (!sg) return
+    setConfirming(prev => new Set(prev).add(bt.id))
+    try {
+      const desc = sg.isIncome
+        ? `Doanh thu${sg.customerName ? ` từ ${sg.customerName}` : ''}${sg.outInvoiceNo ? ` - HĐ ${sg.outInvoiceNo}` : ''}`
+        : bt.description
+
+      const { data: entry } = await supabase.from('journal_entries').insert({
+        company_id: companyId,
+        date: bt.date,
+        description: desc,
+        type: sg.matchedInvoiceId ? 'invoice' : (sg.isIncome ? 'income' : 'expense'),
+        debit_account: sg.debitAccount,
+        credit_account: sg.creditAccount,
+        amount: Math.abs(bt.amount),
+        vat_debit_account: (!sg.isIncome && sg.vatAccount) ? sg.vatAccount : null,
+        vat_credit_account: (sg.isIncome && sg.vatAccount) ? sg.vatAccount : null,
+        vat_amount: 0,
+        invoice_id: sg.matchedInvoiceId || null,
+        status: 'posted',
+      }).select().single()
+
+      await supabase.from('bank_transactions')
+        .update({ status: 'matched', journal_entry_id: entry?.id ?? null })
+        .eq('id', bt.id)
+
+      // If matched with invoice, mark it
+      if (sg.matchedInvoiceId) {
+        await supabase.from('invoices').update({ status: 'matched' }).eq('id', sg.matchedInvoiceId)
+      }
+
+      qc.invalidateQueries({ queryKey: ['bank-transactions', companyId] })
+      qc.invalidateQueries({ queryKey: ['invoices', companyId] })
+      qc.invalidateQueries({ queryKey: ['invoices', companyId, 'pending-for-match'] })
+    } finally {
+      setConfirming(prev => { const s = new Set(prev); s.delete(bt.id); return s })
+    }
+  }
+
+  const deleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const targets = bankTransactions.filter(t => ids.includes(t.id))
+      const matched = targets.filter(t => t.status === 'matched')
+      if (matched.length > 0) {
+        const ok = confirm(
+          `${matched.length > 1 ? `${matched.length} giao dịch` : 'Giao dịch này'} đã hạch toán. Xóa sẽ đồng thời xóa bút toán liên kết và ảnh hưởng đến báo cáo. Tiếp tục?`
+        )
+        if (!ok) return
+        // Cascade delete linked journal entries
+        const jeIds = matched
+          .map(t => (t as BankTransaction & { journal_entry_id?: string }).journal_entry_id)
+          .filter(Boolean) as string[]
+        if (jeIds.length > 0) {
+          await supabase.from('journal_entries').delete().in('id', jeIds)
+        }
+      }
+      await supabase.from('bank_transactions').delete().in('id', ids)
+    },
+    onSuccess: () => {
+      setSelectedTxIds(new Set())
+      qc.invalidateQueries({ queryKey: ['bank-transactions', companyId] })
+      qc.invalidateQueries({ queryKey: ['all-journal-entries', companyId] })
+    },
+  })
+
+  const updateJournalMutation = useMutation({
+    mutationFn: async ({ journalId, debitAccount, creditAccount, description }: {
+      journalId: string; debitAccount: string; creditAccount: string; description: string
+    }) => {
+      await supabase.from('journal_entries').update({
+        debit_account: debitAccount,
+        credit_account: creditAccount,
+        description: description || null,
+      }).eq('id', journalId)
+    },
+    onSuccess: () => {
+      setEditingMatchedId(null)
+      setMatchedJournalId(null)
+      qc.invalidateQueries({ queryKey: ['bank-transactions', companyId] })
+    },
+  })
+
+  const updateTxMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: { description?: string; amount?: number; date?: string } }) => {
+      await supabase.from('bank_transactions').update(data).eq('id', id)
+    },
+    onSuccess: () => {
+      setEditingTxId(null)
+      qc.invalidateQueries({ queryKey: ['bank-transactions', companyId] })
+    },
+  })
+
+  function startEdit(bt: BankTransaction) {
+    setEditingTxId(bt.id)
+    setEditData({ description: bt.description, amount: String(bt.amount), date: bt.date })
+  }
+
+  function saveEdit(id: string) {
+    updateTxMutation.mutate({
+      id,
+      data: {
+        description: editData.description,
+        amount: parseFloat(editData.amount) || 0,
+        date: editData.date,
+      },
+    })
+  }
+
   const unmatched = bankTransactions.filter(t => t.status === 'unmatched')
-  const totalDiff = unmatched.reduce((s, t) => s + t.amount, 0)
+  const matched = bankTransactions.filter(t => t.status === 'matched')
 
-  const unmatchedLedger = ledgerTransactions.filter(
-    t => !bankTransactions.some(bt => bt.matched_transaction_id === t.id)
-  )
+  const highConf = unmatched.filter(t => (getSuggestion(t.id)?.confidence ?? 0) >= 0.5)
+  const lowConf = unmatched.filter(t => (getSuggestion(t.id)?.confidence ?? 0) < 0.5 || !getSuggestion(t.id))
 
-  // Ending balance comparison
-  const sortedByDate = [...bankTransactions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-  const bankEndingBalance = sortedByDate[0]?.balance ?? null
-  const softwareEndingBalance = ledgerTransactions.reduce((sum, t) => {
-    return t.type === 'income' ? sum + t.amount : sum - t.amount
-  }, 0)
-  const balanceDiff = bankEndingBalance !== null ? Math.round(bankEndingBalance) - Math.round(softwareEndingBalance) : null
+  const toggleSelect = (id: string) => setSelectedTxIds(prev => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
 
   return (
     <div className="space-y-4">
-      {/* Import */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-3">
-          <input type="file" accept=".csv,.xlsx,.xls" className="hidden" id="bank-import" onChange={handleImport} />
-          <label htmlFor="bank-import">
-            <Button asChild variant="outline" disabled={parsing}>
-              <span>
-                {parsing ? <><span className="animate-spin mr-1">⏳</span>Đang đọc file...</> : <><Upload className="h-4 w-4" />Import sao kê ngân hàng</>}
-              </span>
-            </Button>
-          </label>
-          <p className="text-xs text-gray-500">Hỗ trợ Excel/CSV từ TCB, VCB, BIDV, MB, ACB, VPBank, Agribank</p>
-        </div>
-
-        {importStatus?.type === 'success' && (
-          <div className="flex items-start gap-2 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
-            <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
-            <div className="text-sm">
-              <p className="font-medium text-green-800">Import thành công!</p>
-              <p className="text-green-700">Đã đọc <strong>{importStatus.count}</strong> giao dịch từ <em>{importStatus.fileName}</em></p>
-            </div>
-            <button onClick={() => setImportStatus(null)} className="ml-auto text-green-400 hover:text-green-600">
-              <XCircle className="h-4 w-4" />
-            </button>
-          </div>
+      {/* Month marker */}
+      <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl border border-slate-100 bg-slate-50">
+        <select
+          value={selectedMonth}
+          onChange={e => setSelectedMonth(e.target.value)}
+          className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-white"
+        >
+          {monthOptions.map(o => (
+            <option key={o.val} value={o.val}>{o.label}</option>
+          ))}
+        </select>
+        <button
+          onClick={toggleMonthClose}
+          className={cn(
+            'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all',
+            isCurrentMonthClosed
+              ? 'bg-green-50 border-green-200 text-green-700 hover:bg-white hover:text-slate-500 hover:border-slate-200'
+              : 'bg-white border-slate-200 text-slate-500 hover:bg-green-50 hover:border-green-200 hover:text-green-700'
+          )}
+        >
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          {isCurrentMonthClosed ? 'Đã hoàn thành — bấm để bỏ' : 'Đánh dấu hoàn thành'}
+        </button>
+        {isCurrentMonthClosed && (
+          <span className="text-xs text-slate-400">Kỳ này đã đánh dấu xong. Vẫn sửa được bình thường.</span>
         )}
-
-        {importStatus?.type === 'error' && (
-          <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-4 py-3">
-            <AlertCircle className="h-4 w-4 text-red-600 mt-0.5 shrink-0" />
-            <div className="text-sm">
-              <p className="font-medium text-red-800">Lỗi import</p>
-              <p className="text-red-700 whitespace-pre-line">{importStatus.message}</p>
-            </div>
-            <button onClick={() => setImportStatus(null)} className="ml-auto text-red-400 hover:text-red-600">
-              <XCircle className="h-4 w-4" />
-            </button>
-          </div>
+        {closedMonths.length > 0 && !isCurrentMonthClosed && (
+          <span className="text-xs text-slate-400 ml-auto">
+            Đã hoàn thành: {closedMonths.map(m => {
+              const [y, mo] = m.split('-')
+              return `T${parseInt(mo)}/${y}`
+            }).join(', ')}
+          </span>
         )}
       </div>
 
-      {bankTransactions.length > 0 && (
-        <>
-          {/* Ending balance comparison */}
-          {bankEndingBalance !== null && (
-            <div className={`rounded-lg border-2 p-4 ${balanceDiff === 0 ? 'border-green-300 bg-green-50' : 'border-red-200 bg-red-50'}`}>
-              <p className="text-sm font-semibold text-gray-800 mb-3">Đối chiếu số dư cuối kỳ</p>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-600">Số dư theo sao kê ngân hàng</span>
-                  <span className="font-medium">{formatVND(bankEndingBalance)}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-600">Số dư theo phần mềm (TK 112)</span>
-                  <span className="font-medium">{formatVND(softwareEndingBalance)}</span>
-                </div>
-                <div className="flex justify-between items-center border-t pt-2 mt-1">
-                  <span className="font-semibold">Chênh lệch</span>
-                  {balanceDiff === 0
-                    ? <span className="font-bold text-green-600 flex items-center gap-1">
-                        <span>0 ✓ Đã đối chiếu xong</span>
-                      </span>
-                    : <span className="font-bold text-red-600">{formatVND(Math.abs(balanceDiff as number))} (chưa khớp)</span>
-                  }
-                </div>
-              </div>
-            </div>
-          )}
+      {/* Import row */}
+      <div className="flex flex-wrap items-center gap-3">
+        <select
+          value={selectedBankAccountId}
+          onChange={e => setSelectedBankAccountId(e.target.value)}
+          className="rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 min-w-[180px]"
+        >
+          <option value="">Tất cả tài khoản</option>
+          {bankAccounts.map(a => (
+            <option key={a.id} value={a.id}>{a.bank_name} — {a.account_code}</option>
+          ))}
+        </select>
 
-          {/* Summary */}
-          <div className="grid grid-cols-3 gap-4">
-            {[
-              { label: 'Đã khớp', value: matched.length, color: 'text-green-600' },
-              { label: 'Chưa khớp', value: unmatched.length, color: 'text-amber-600' },
-              { label: 'Chênh lệch', value: formatVND(Math.abs(totalDiff)), color: 'text-red-600' },
-            ].map(({ label, value, color }) => (
-              <Card key={label}>
-                <CardContent className="py-3">
-                  <p className="text-xs text-gray-500">{label}</p>
-                  <p className={`text-lg font-bold ${color}`}>{value}</p>
-                </CardContent>
-              </Card>
-            ))}
+        <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" id="bank-import" onChange={handleImport} />
+        <label htmlFor="bank-import">
+          <Button asChild variant="outline" disabled={parsing}>
+            <span>
+              {parsing
+                ? <><span className="animate-spin mr-1">⏳</span>Đang đọc file...</>
+                : <><Upload className="h-4 w-4" />Import sao kê</>}
+            </span>
+          </Button>
+        </label>
+        <p className="text-xs text-slate-400">CSV/Excel từ TCB, VCB, BIDV, MB, ACB, VPBank, Agribank</p>
+
+        {selectedTxIds.size > 0 && (
+          <button
+            onClick={() => { if (confirm(`Xóa ${selectedTxIds.size} giao dịch đã chọn?`)) deleteMutation.mutate([...selectedTxIds]) }}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-medium rounded-lg border border-red-200 transition-colors"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Xóa {selectedTxIds.size} dòng
+          </button>
+        )}
+      </div>
+
+      {importStatus?.type === 'success' && (
+        <div className="flex items-start gap-2 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
+          <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
+          <div className="text-sm flex-1">
+            <p className="font-medium text-green-800">Import thành công!</p>
+            <p className="text-green-700">Đã đọc <strong>{importStatus.count}</strong> giao dịch từ <em>{importStatus.fileName}</em></p>
           </div>
-
-          {/* Unmatched bank transactions */}
-          {unmatched.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-sm">Giao dịch ngân hàng chưa khớp ({unmatched.length})</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  {unmatched.map(bt => (
-                    <div key={bt.id} className="p-3 rounded border border-amber-100 bg-amber-50">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm font-medium text-gray-900 truncate max-w-xs">{bt.description}</p>
-                          <p className="text-xs text-gray-500">{formatDate(bt.date)}</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className={`font-medium text-sm ${bt.amount > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                            {bt.amount > 0 ? '+' : ''}{formatVND(bt.amount)}
-                          </span>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setMatchingBankId(matchingBankId === bt.id ? null : bt.id)}
-                          >
-                            <Link2 className="h-3.5 w-3.5" /> Khớp
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => createFromBankMutation.mutate(bt)}
-                          >
-                            <Plus className="h-3.5 w-3.5" /> Tạo mới
-                          </Button>
-                        </div>
-                      </div>
-                      {matchingBankId === bt.id && (
-                        <div className="mt-2 border-t border-amber-200 pt-2">
-                          <p className="text-xs text-gray-500 mb-1">Chọn giao dịch trong sổ để khớp:</p>
-                          <div className="space-y-1 max-h-40 overflow-y-auto">
-                            {unmatchedLedger.map(lt => (
-                              <button
-                                key={lt.id}
-                                onClick={() => matchMutation.mutate({ bankTxId: bt.id, ledgerTxId: lt.id })}
-                                className="w-full text-left p-2 rounded text-xs hover:bg-white border border-transparent hover:border-blue-200 transition-colors"
-                              >
-                                <span className="font-medium">{lt.description || lt.counterparty || '—'}</span>
-                                <span className="text-gray-400 ml-2">{formatDate(lt.date)}</span>
-                                <span className={`ml-2 ${lt.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
-                                  {formatVND(lt.amount)}
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Matched */}
-          {matched.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-sm">Đã khớp ({matched.length})</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-1">
-                  {matched.map(bt => (
-                    <div key={bt.id} className="flex items-center justify-between p-2 rounded text-xs bg-green-50">
-                      <span className="text-gray-600 truncate max-w-xs">{bt.description}</span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-gray-400">{formatDate(bt.date)}</span>
-                        <Badge variant="success">Khớp</Badge>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-        </>
+          <button onClick={() => setImportStatus(null)} className="text-green-400 hover:text-green-600">
+            <XCircle className="h-4 w-4" />
+          </button>
+        </div>
       )}
 
-      {bankTransactions.length === 0 && statements.length === 0 && (
+      {importStatus?.type === 'error' && (
+        <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-4 py-3">
+          <AlertCircle className="h-4 w-4 text-red-600 mt-0.5 shrink-0" />
+          <div className="text-sm flex-1">
+            <p className="font-medium text-red-800">Lỗi import</p>
+            <p className="text-red-700 whitespace-pre-line">{importStatus.message}</p>
+          </div>
+          <button onClick={() => setImportStatus(null)} className="text-red-400 hover:text-red-600">
+            <XCircle className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {bankTransactions.length === 0 && (
         <Card>
-          <CardContent className="text-center py-10 text-gray-400 text-sm">
-            Chưa import sao kê ngân hàng. Tải file CSV/Excel từ internet banking và import vào đây.
+          <CardContent className="text-center py-10 text-slate-400 text-sm">
+            Chưa có giao dịch nào. Import sao kê ngân hàng để bắt đầu.
           </CardContent>
         </Card>
       )}
+
+      {/* Summary chips */}
+      {bankTransactions.length > 0 && (
+        <div className="flex gap-3 text-sm">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700">
+            <AlertCircle className="h-3.5 w-3.5" />
+            {unmatched.length} chờ xử lý
+          </div>
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-green-50 border border-green-200 text-green-700">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            {matched.length} đã xử lý
+          </div>
+        </div>
+      )}
+
+      {/* Needs confirmation — high confidence */}
+      {highConf.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-indigo-500" />
+            <p className="text-sm font-semibold text-slate-700">Cần xác nhận ({highConf.length})</p>
+            <p className="text-xs text-slate-400">App đã gợi ý — review và xác nhận</p>
+          </div>
+          {highConf.map(bt => {
+            const sg = getSuggestion(bt.id)
+            if (!sg) return null
+            const isConfirming = confirming.has(bt.id)
+            return (
+              <TxSuggestionCard
+                key={bt.id}
+                bt={bt}
+                sg={sg}
+                isConfirming={isConfirming}
+                isSelected={selectedTxIds.has(bt.id)}
+                isEditing={editingTxId === bt.id}
+                editData={editData}
+                onToggleSelect={() => toggleSelect(bt.id)}
+                onConfirm={() => confirmTx(bt)}
+                onEdit={() => startEdit(bt)}
+                onSaveEdit={() => saveEdit(bt.id)}
+                onCancelEdit={() => setEditingTxId(null)}
+                onEditData={setEditData}
+                onUpdateSuggestion={patch => updateEdit(bt.id, patch)}
+                onDelete={() => { if (confirm('Xóa giao dịch này?')) deleteMutation.mutate([bt.id]) }}
+              />
+            )
+          })}
+        </div>
+      )}
+
+      {/* Needs manual — low confidence */}
+      {lowConf.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-amber-500" />
+            <p className="text-sm font-semibold text-slate-700">Cần xử lý thủ công ({lowConf.length})</p>
+            <p className="text-xs text-slate-400">App không chắc — kế toán tự chọn tài khoản</p>
+          </div>
+          {lowConf.map(bt => {
+            const sg = getSuggestion(bt.id)
+            if (!sg) return null
+            const isConfirming = confirming.has(bt.id)
+            return (
+              <TxSuggestionCard
+                key={bt.id}
+                bt={bt}
+                sg={sg}
+                isConfirming={isConfirming}
+                isSelected={selectedTxIds.has(bt.id)}
+                isEditing={editingTxId === bt.id}
+                editData={editData}
+                onToggleSelect={() => toggleSelect(bt.id)}
+                onConfirm={() => confirmTx(bt)}
+                onEdit={() => startEdit(bt)}
+                onSaveEdit={() => saveEdit(bt.id)}
+                onCancelEdit={() => setEditingTxId(null)}
+                onEditData={setEditData}
+                onUpdateSuggestion={patch => updateEdit(bt.id, patch)}
+                onDelete={() => { if (confirm('Xóa giao dịch này?')) deleteMutation.mutate([bt.id]) }}
+                isManual
+              />
+            )
+          })}
+        </div>
+      )}
+
+      {/* Done — collapsed */}
+      {matched.length > 0 && (
+        <div>
+          <button
+            onClick={() => setShowDone(!showDone)}
+            className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700 transition-colors"
+          >
+            {showDone ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            <CheckCircle2 className="h-4 w-4 text-green-500" />
+            Đã xử lý ({matched.length})
+          </button>
+          {showDone && (
+            <div className="mt-2 space-y-1">
+              {matched.map(bt => {
+                const isEditingThis = editingMatchedId === bt.id
+                return (
+                  <div key={bt.id} className="rounded-lg bg-green-50 border border-green-100 text-sm overflow-hidden">
+                    <div className="flex items-center justify-between p-2.5">
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <input type="checkbox" checked={selectedTxIds.has(bt.id)} onChange={() => toggleSelect(bt.id)} className="rounded shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-slate-700 truncate">{bt.description}</p>
+                          <p className="text-xs text-slate-400">{formatDate(bt.date)}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0 ml-2">
+                        <span className={cn('font-mono text-sm font-medium', bt.amount > 0 ? 'text-green-600' : 'text-slate-700')}>
+                          {bt.amount > 0 ? '+' : ''}{formatVND(bt.amount)}
+                        </span>
+                        <Badge variant="success">Đã hạch toán</Badge>
+                        <button
+                          onClick={async () => {
+                            if (isEditingThis) { setEditingMatchedId(null); return }
+                            // Load journal entry for this tx
+                            const journalId = (bt as BankTransaction & { journal_entry_id?: string }).journal_entry_id
+                            if (journalId) {
+                              const { data } = await supabase.from('journal_entries').select('*').eq('id', journalId).single()
+                              if (data) {
+                                setMatchedEditForm({ debitAccount: data.debit_account, creditAccount: data.credit_account, description: data.description ?? '' })
+                                setMatchedJournalId(journalId)
+                              }
+                            } else {
+                              // Fallback: find by date + amount
+                              const { data } = await supabase.from('journal_entries')
+                                .select('*').eq('company_id', companyId).eq('date', bt.date)
+                                .gte('amount', Math.abs(bt.amount) * 0.99).lte('amount', Math.abs(bt.amount) * 1.01)
+                                .order('created_at', { ascending: false }).limit(1).single()
+                              if (data) {
+                                setMatchedEditForm({ debitAccount: data.debit_account, creditAccount: data.credit_account, description: data.description ?? '' })
+                                setMatchedJournalId(data.id)
+                              }
+                            }
+                            setEditingMatchedId(bt.id)
+                          }}
+                          className={cn('transition-colors', isEditingThis ? 'text-indigo-500' : 'text-slate-300 hover:text-indigo-400')}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={() => { if (confirm('Xóa giao dịch này?')) deleteMutation.mutate([bt.id]) }}
+                          className="text-slate-300 hover:text-red-400 transition-colors"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Inline edit panel */}
+                    {isEditingThis && (
+                      <div className="border-t border-green-200 bg-white px-3 py-2.5 space-y-2">
+                        {matchedJournalId ? (
+                          <>
+                            <p className="text-xs text-slate-400 font-medium">Sửa bút toán hạch toán</p>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-xs text-slate-500 mb-1 block">TK Nợ</label>
+                                <select
+                                  value={matchedEditForm.debitAccount}
+                                  onChange={e => setMatchedEditForm(f => ({ ...f, debitAccount: e.target.value }))}
+                                  className="w-full h-7 text-xs rounded border border-slate-200 px-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                                >
+                                  {COMMON_ACCOUNTS.map(a => <option key={a.code} value={a.code}>{a.code} — {a.name}</option>)}
+                                </select>
+                              </div>
+                              <div>
+                                <label className="text-xs text-slate-500 mb-1 block">TK Có</label>
+                                <select
+                                  value={matchedEditForm.creditAccount}
+                                  onChange={e => setMatchedEditForm(f => ({ ...f, creditAccount: e.target.value }))}
+                                  className="w-full h-7 text-xs rounded border border-slate-200 px-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                                >
+                                  {COMMON_ACCOUNTS.map(a => <option key={a.code} value={a.code}>{a.code} — {a.name}</option>)}
+                                </select>
+                              </div>
+                            </div>
+                            <div>
+                              <label className="text-xs text-slate-500 mb-1 block">Diễn giải</label>
+                              <input
+                                value={matchedEditForm.description}
+                                onChange={e => setMatchedEditForm(f => ({ ...f, description: e.target.value }))}
+                                className="w-full h-7 text-xs rounded border border-slate-200 px-2 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                              />
+                            </div>
+                            <div className="flex gap-2 justify-end">
+                              <button onClick={() => setEditingMatchedId(null)} className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1">Huỷ</button>
+                              <button
+                                onClick={() => updateJournalMutation.mutate({ journalId: matchedJournalId, ...matchedEditForm })}
+                                disabled={updateJournalMutation.isPending}
+                                className="text-xs bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700 disabled:opacity-50"
+                              >
+                                {updateJournalMutation.isPending ? 'Đang lưu...' : 'Lưu'}
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <p className="text-xs text-slate-400">Không tìm thấy bút toán liên kết. Sửa trong tab Cân đối thử.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Tx Suggestion Card ───────────────────────────────────────────────────────
+
+function TxSuggestionCard({
+  bt, sg, isConfirming, isSelected, isEditing, editData,
+  onToggleSelect, onConfirm, onEdit, onSaveEdit, onCancelEdit,
+  onEditData, onUpdateSuggestion, onDelete, isManual = false,
+}: {
+  bt: BankTransaction
+  sg: TxSuggestion
+  isConfirming: boolean
+  isSelected: boolean
+  isEditing: boolean
+  editData: { description: string; amount: string; date: string }
+  onToggleSelect: () => void
+  onConfirm: () => void
+  onEdit: () => void
+  onSaveEdit: () => void
+  onCancelEdit: () => void
+  onEditData: (d: { description: string; amount: string; date: string }) => void
+  onUpdateSuggestion: (p: Partial<TxSuggestion>) => void
+  onDelete: () => void
+  isManual?: boolean
+}) {
+  const hasInvoiceMatch = !!sg.matchedInvoiceId
+  const borderColor = isManual ? 'border-amber-200' : hasInvoiceMatch ? 'border-blue-200' : 'border-indigo-200'
+  const bgColor = isManual ? 'bg-amber-50' : hasInvoiceMatch ? 'bg-blue-50' : 'bg-indigo-50'
+
+  return (
+    <div className={cn('rounded-xl border p-3 space-y-2', borderColor, bgColor)}>
+      <div className="flex items-start gap-2">
+        <input type="checkbox" checked={isSelected} onChange={onToggleSelect} className="mt-1 rounded" />
+        <div className="flex-1 min-w-0">
+          {isEditing ? (
+            <div className="space-y-2">
+              <input
+                value={editData.description}
+                onChange={e => onEditData({ ...editData, description: e.target.value })}
+                className="w-full text-sm border border-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+              <div className="flex gap-2">
+                <input
+                  type="date"
+                  value={editData.date}
+                  onChange={e => onEditData({ ...editData, date: e.target.value })}
+                  className="text-xs border border-slate-200 rounded-lg px-2 py-1 focus:outline-none"
+                />
+                <input
+                  value={editData.amount}
+                  onChange={e => onEditData({ ...editData, amount: e.target.value })}
+                  className="text-xs border border-slate-200 rounded-lg px-2 py-1 w-32 focus:outline-none font-mono"
+                />
+                <Button size="sm" onClick={onSaveEdit}>Lưu</Button>
+                <Button size="sm" variant="ghost" onClick={onCancelEdit}>Hủy</Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <p className="text-sm font-medium text-slate-800 truncate">{bt.description}</p>
+              <p className="text-xs text-slate-500">{formatDate(bt.date)}</p>
+            </>
+          )}
+
+          {/* Suggestion info */}
+          {!isEditing && (
+            <div className="mt-1.5">
+              {hasInvoiceMatch ? (
+                <div className="flex items-center gap-1.5 text-xs text-blue-700">
+                  <Link2 className="h-3 w-3" />
+                  <span>Có hóa đơn khớp: <strong>{sg.matchedInvoiceName}</strong> / HĐ {sg.matchedInvoiceNumber}</span>
+                </div>
+              ) : (
+                <p className="text-xs text-indigo-600">{sg.reason}</p>
+              )}
+            </div>
+          )}
+
+          {/* Income: extra fields */}
+          {!isEditing && sg.isIncome && (
+            <div className="mt-2 flex gap-2">
+              <input
+                value={sg.customerName}
+                onChange={e => onUpdateSuggestion({ customerName: e.target.value })}
+                placeholder="Tên khách hàng"
+                className="flex-1 text-xs border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              />
+              <input
+                value={sg.outInvoiceNo}
+                onChange={e => onUpdateSuggestion({ outInvoiceNo: e.target.value })}
+                placeholder="Số HĐ (nếu có)"
+                className="w-32 text-xs border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              />
+            </div>
+          )}
+
+          {/* Account selectors */}
+          {!isEditing && (
+            <div className="mt-2 flex gap-2 flex-wrap items-center">
+              <span className="text-xs text-slate-500">Nợ:</span>
+              <select
+                value={sg.debitAccount}
+                onChange={e => onUpdateSuggestion({ debitAccount: e.target.value })}
+                className="text-xs border border-slate-200 rounded px-2 py-1 focus:outline-none bg-white"
+              >
+                {COMMON_ACCOUNTS.map(a => <option key={a.code} value={a.code}>{a.label}</option>)}
+              </select>
+              <span className="text-xs text-slate-500">Có:</span>
+              <select
+                value={sg.creditAccount}
+                onChange={e => onUpdateSuggestion({ creditAccount: e.target.value })}
+                className="text-xs border border-slate-200 rounded px-2 py-1 focus:outline-none bg-white"
+              >
+                {COMMON_ACCOUNTS.map(a => <option key={a.code} value={a.code}>{a.label}</option>)}
+              </select>
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <span className={cn('font-mono font-semibold text-sm', bt.amount > 0 ? 'text-green-600' : 'text-slate-800')}>
+            {bt.amount > 0 ? '+' : ''}{formatVND(bt.amount)}
+          </span>
+          {!isEditing && (
+            <span className="text-xs text-slate-400">{Math.round(sg.confidence * 100)}% tin cậy</span>
+          )}
+        </div>
+      </div>
+
+      {!isEditing && (
+        <div className="flex items-center gap-2 pt-1 border-t border-slate-200/60">
+          <Button size="sm" onClick={onConfirm} disabled={isConfirming}>
+            <Check className="h-3.5 w-3.5" />
+            {isConfirming ? 'Đang hạch toán...' : 'Xác nhận'}
+          </Button>
+          <button onClick={onEdit} className="text-xs text-slate-400 hover:text-slate-600 transition-colors px-2 py-1">
+            <Pencil className="h-3 w-3 inline mr-1" />Sửa
+          </button>
+          <button onClick={onDelete} className="ml-auto text-slate-300 hover:text-red-400 transition-colors">
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Main Tab ─────────────────────────────────────────────────────────────────
+
+type BankSubTab = 'statements' | 'cashledger' | 'adjustments' | 'accounts'
+
+export default function BankReconciliationTab({ companyId }: { companyId: string }) {
+  const [subTab, setSubTab] = useState<BankSubTab>('statements')
+
+  const SUB_TABS: { key: BankSubTab; label: string }[] = [
+    { key: 'statements', label: 'Sao kê & Đối chiếu' },
+    { key: 'cashledger', label: 'Sổ quỹ (TK 111)' },
+    { key: 'adjustments', label: 'Bút toán điều chỉnh' },
+    { key: 'accounts', label: 'Tài khoản NH' },
+  ]
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-1.5 border-b border-slate-100 pb-3">
+        {SUB_TABS.map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => setSubTab(key)}
+            className={cn(
+              'px-4 py-1.5 rounded-xl text-sm font-medium transition-all',
+              subTab === key
+                ? 'bg-teal-600 text-white shadow-sm'
+                : 'bg-teal-50 text-slate-500 hover:bg-teal-100'
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {subTab === 'statements' && <StatementsSection companyId={companyId} />}
+      {subTab === 'cashledger' && <CashLedgerTab companyId={companyId} />}
+      {subTab === 'adjustments' && <SectionButToanDieuChinh companyId={companyId} />}
+      {subTab === 'accounts' && <BankAccountsSection companyId={companyId} />}
     </div>
   )
 }

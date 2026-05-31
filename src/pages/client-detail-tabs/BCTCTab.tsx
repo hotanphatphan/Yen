@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { FileDown } from 'lucide-react'
+import { FileDown, FileSpreadsheet } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
+import * as XLSX from 'xlsx'
 import { Button } from '@/components/shared/Button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/shared/Card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/shared/Select'
@@ -165,6 +166,73 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
     return { ...r, balance: runningBalance }
   })
 
+  function exportExcel() {
+    const wb = XLSX.utils.book_new()
+    const fmt = (n: number) => n
+
+    // B01 — Bảng cân đối kế toán
+    const b01 = [
+      ['BẢNG CÂN ĐỐI KẾ TOÁN (B01)'],
+      [`Kỳ: ${period}   Đơn vị: ${company?.name ?? ''}   MST: ${company?.mst ?? ''}`],
+      [],
+      ['Chỉ tiêu', 'Số tiền (đ)'],
+      ['A. TÀI SẢN', ''],
+      ['  I. Tiền và tương đương tiền (TK 111, 112)', fmt(cash)],
+      ['  II. Phải thu khách hàng (TK 131)', fmt(receivables)],
+      ['  III. Thuế VAT được khấu trừ (TK 133)', fmt(vatInput)],
+      ['  IV. Hàng tồn kho (TK 152, 155, 156)', fmt(inventory)],
+      ['  V. Tài sản cố định (TK 211 - 214)', fmt(ppe - accDepreciation)],
+      ['  VI. Chi phí trả trước (TK 242)', fmt(prepaid)],
+      ['TỔNG CỘNG TÀI SẢN', fmt(totalAssets)],
+      [],
+      ['B. NGUỒN VỐN', ''],
+      ['  I. Vay ngắn hạn (TK 311)', fmt(shortTermLoan)],
+      ['  II. Phải trả người bán (TK 331)', fmt(payables)],
+      ['  III. Thuế phải nộp (TK 333)', fmt(taxPayable)],
+      ['  IV. Phải trả người lao động (TK 334)', fmt(salaryPayable)],
+      ['  V. Vốn chủ sở hữu (TK 411)', fmt(capital)],
+      ['  VI. Lợi nhuận chưa phân phối (TK 421 + LNST)', fmt(retainedEarnings)],
+      ['TỔNG CỘNG NGUỒN VỐN', fmt(totalLiabilities + totalEquity)],
+      [],
+      isUnbalanced ? [`⚠️ CHÊNH LỆCH: ${new Intl.NumberFormat('vi-VN').format(balanceGap)} đ`, ''] : ['✅ Cân bằng', ''],
+    ]
+    const ws1 = XLSX.utils.aoa_to_sheet(b01)
+    XLSX.utils.book_append_sheet(wb, ws1, 'B01 CĐKT')
+
+    // B02 — KQHĐKD
+    const b02 = [
+      ['KẾT QUẢ HOẠT ĐỘNG KINH DOANH (B02)'],
+      [`Kỳ: ${period}   Đơn vị: ${company?.name ?? ''}   MST: ${company?.mst ?? ''}`],
+      [],
+      ['Chỉ tiêu', 'Số tiền (đ)'],
+      ['Doanh thu thuần', fmt(totalRevenue)],
+      ['Chi phí', fmt(totalExpense)],
+      ['Lợi nhuận trước thuế', fmt(netProfit)],
+    ]
+    const ws2 = XLSX.utils.aoa_to_sheet(b02)
+    XLSX.utils.book_append_sheet(wb, ws2, 'B02 KQKD')
+
+    // Trial Balance
+    if (tbRows.length > 0) {
+      const tbSheet = [
+        ['BẢNG CÂN ĐỐI TÀI KHOẢN'],
+        [`Kỳ: ${period}`],
+        [],
+        ['Mã TK', 'Tên TK', 'Tổng Nợ', 'Tổng Có', 'Dư Nợ', 'Dư Có'],
+        ...tbRows.map(r => [
+          r.code, r.name,
+          r.debit, r.credit,
+          r.balance > 0 ? r.balance : 0,
+          r.balance < 0 ? Math.abs(r.balance) : 0,
+        ]),
+      ]
+      const wsTb = XLSX.utils.aoa_to_sheet(tbSheet)
+      XLSX.utils.book_append_sheet(wb, wsTb, 'Cân đối TK')
+    }
+
+    XLSX.writeFile(wb, `bctc-${period}-${company?.name ?? companyId}.xlsx`)
+  }
+
   async function exportPDF() {
     if (!company) return
     setGenerating(true)
@@ -187,8 +255,28 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
     }
   }
 
+  const totalSourcesOfFunding = totalLiabilities + totalEquity
+  const balanceGap = Math.abs(totalAssets - totalSourcesOfFunding)
+  const isUnbalanced = balanceGap > 1000 && (totalAssets > 0 || totalSourcesOfFunding > 0)
+
   return (
     <div className="space-y-4">
+      {/* Balance warning */}
+      {isUnbalanced && (
+        <div className="flex items-start gap-3 px-4 py-3 rounded-xl bg-red-50 border-2 border-red-300">
+          <span className="text-red-500 text-lg font-bold shrink-0">!</span>
+          <div>
+            <p className="text-sm font-semibold text-red-800">Tài sản không cân với nguồn vốn</p>
+            <p className="text-xs text-red-700 mt-0.5">
+              Tổng tài sản: <strong>{new Intl.NumberFormat('vi-VN').format(totalAssets)} đ</strong> ·
+              Tổng nguồn vốn: <strong>{new Intl.NumberFormat('vi-VN').format(totalSourcesOfFunding)} đ</strong> ·
+              Chênh lệch: <strong>{new Intl.NumberFormat('vi-VN').format(balanceGap)} đ</strong>
+            </p>
+            <p className="text-xs text-red-600 mt-1">Kiểm tra lại bút toán hoặc hạch toán còn thiếu trong tab Cân đối thử.</p>
+          </div>
+        </div>
+      )}
+
       {/* Period selector + export */}
       <div className="flex items-center gap-3 flex-wrap">
         <Label>Kỳ báo cáo:</Label>
@@ -203,6 +291,10 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
         <Button onClick={exportPDF} disabled={generating || transactions.length === 0}>
           <FileDown className="h-4 w-4" />
           {generating ? 'Đang tạo...' : 'Xuất PDF TT99 (B01+B02+B03)'}
+        </Button>
+        <Button variant="outline" onClick={exportExcel} disabled={transactions.length === 0 && journalEntries.length === 0}>
+          <FileSpreadsheet className="h-4 w-4" />
+          Xuất Excel
         </Button>
       </div>
 

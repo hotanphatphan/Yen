@@ -129,6 +129,17 @@ export interface Transaction {
   created_at: string
 }
 
+export interface BankAccount {
+  id: string
+  company_id: string
+  bank_name: string
+  account_number: string
+  account_name: string | null
+  account_code: string
+  is_active: boolean
+  created_at: string
+}
+
 export interface BankStatement {
   id: string
   company_id: string
@@ -136,6 +147,7 @@ export interface BankStatement {
   bank_name: string | null
   period_start: string | null
   period_end: string | null
+  bank_account_id: string | null
   created_at: string
 }
 
@@ -150,6 +162,9 @@ export interface BankTransaction {
   amount: number
   balance: number | null
   matched_transaction_id: string | null
+  bank_account_id: string | null
+  journal_entry_id: string | null
+  posting_data: Record<string, unknown> | null
   status: BankTransactionStatus
   created_at: string
 }
