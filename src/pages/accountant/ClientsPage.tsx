@@ -54,7 +54,7 @@ export default function ClientsPage() {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
 
-  const { register, handleSubmit, reset, setValue, watch, formState: { errors, isSubmitting } } = useForm<FormData>({
+  const { register, handleSubmit, reset, setValue, watch, setError, formState: { errors, isSubmitting } } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: { business_type: 'cong_ty', vat_rate: 10 },
   })
@@ -67,8 +67,14 @@ export default function ClientsPage() {
   )
 
   async function onSubmit(data: FormData) {
+    const mstTrimmed = data.mst.trim()
+    if (companies.some(c => c.mst.trim() === mstTrimmed)) {
+      setError('mst', { type: 'manual', message: 'MST này đã tồn tại trong hệ thống. Vui lòng kiểm tra lại.' })
+      return
+    }
     await createCompany.mutateAsync({
       ...data,
+      mst: mstTrimmed,
       owner_name: data.owner_name || undefined,
       owner_phone: data.owner_phone || undefined,
       owner_email: data.owner_email || undefined,

@@ -421,7 +421,7 @@ function SectionDoanhThu({ companyId }: { companyId: string }) {
 
 // --- Section C: Bút toán điều chỉnh ---
 
-function SectionButToanDieuChinh({ companyId }: { companyId: string }) {
+export function SectionButToanDieuChinh({ companyId }: { companyId: string }) {
   const qc = useQueryClient()
   const ALL_ACCOUNTS = DEFAULT_ACCOUNTS
 

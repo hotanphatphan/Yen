@@ -8,18 +8,18 @@ if (typeof ReadableStream !== 'undefined' && !(Symbol.asyncIterator in ReadableS
   }
 }
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Upload, FileText, X, CheckCircle2, ArrowDownCircle,
-  ArrowUpCircle, AlertCircle, BookOpen, ChevronDown, ChevronUp, Trash2,
+  ArrowUpCircle, AlertCircle, BookOpen, ChevronDown, ChevronUp, Trash2, Eye, Pencil, Plus,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/shared/Dialog'
 import { Button } from '@/components/shared/Button'
 import { supabase } from '@/lib/supabase'
 import { suggestAccounts, COMMON_ACCOUNTS } from '@/lib/accountSuggestion'
 import { cn } from '@/lib/utils'
-import type { Invoice } from '@/types'
+import type { Invoice, JournalEntry } from '@/types'
 // ─── PDF text extraction ──────────────────────────────────────────────────────
 
 async function extractPdfText(buffer: ArrayBuffer): Promise<string> {
@@ -106,10 +106,11 @@ interface UploadItem {
 
 // ─── Post dialog ──────────────────────────────────────────────────────────────
 
-function PostInvoiceDialog({ invoice, onClose, onPosted }: {
+function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
   invoice: Invoice
   onClose: () => void
   onPosted: () => void
+  mode?: 'create' | 'edit'
 }) {
   const suggestion = suggestAccounts(invoice)
   const [debitAccount, setDebitAccount] = useState(suggestion.debitAccount)
@@ -118,12 +119,34 @@ function PostInvoiceDialog({ invoice, onClose, onPosted }: {
   const [vatCredit, setVatCredit] = useState(suggestion.vatCreditAccount ?? '')
   const [notes, setNotes] = useState('')
   const [loading, setLoading] = useState(false)
+  const [existingEntryId, setExistingEntryId] = useState<string | null>(null)
   const isIncoming = invoice.direction === 'incoming'
+
+  // In edit mode, load existing journal entry and prefill
+  useEffect(() => {
+    if (mode !== 'edit') return
+    supabase
+      .from('journal_entries')
+      .select('*')
+      .eq('invoice_id', invoice.id)
+      .single()
+      .then(({ data }) => {
+        if (data) {
+          const entry = data as JournalEntry
+          setExistingEntryId(entry.id)
+          setDebitAccount(entry.debit_account)
+          setCreditAccount(entry.credit_account)
+          setVatDebit(entry.vat_debit_account ?? '')
+          setVatCredit(entry.vat_credit_account ?? '')
+          setNotes(entry.notes ?? '')
+        }
+      })
+  }, [mode, invoice.id])
 
   async function handlePost() {
     setLoading(true)
     try {
-      const { error: e1 } = await supabase.from('journal_entries').insert({
+      const entryData = {
         company_id: invoice.company_id,
         date: invoice.invoice_date ?? new Date().toISOString().split('T')[0],
         description: isIncoming
@@ -139,12 +162,17 @@ function PostInvoiceDialog({ invoice, onClose, onPosted }: {
         invoice_id: invoice.id,
         notes: notes || null,
         status: 'posted',
-      })
-      if (e1) throw e1
+      }
 
-      const { error: e2 } = await supabase
-        .from('invoices').update({ status: 'posted' }).eq('id', invoice.id)
-      if (e2) throw e2
+      if (mode === 'edit' && existingEntryId) {
+        const { error } = await supabase.from('journal_entries').update(entryData).eq('id', existingEntryId)
+        if (error) throw error
+      } else {
+        const { error: e1 } = await supabase.from('journal_entries').insert(entryData)
+        if (e1) throw e1
+        const { error: e2 } = await supabase.from('invoices').update({ status: 'posted' }).eq('id', invoice.id)
+        if (e2) throw e2
+      }
 
       onPosted()
     } finally {
@@ -156,7 +184,7 @@ function PostInvoiceDialog({ invoice, onClose, onPosted }: {
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Hạch toán hóa đơn</DialogTitle>
+          <DialogTitle>{mode === 'edit' ? 'Sửa hạch toán' : 'Hạch toán hóa đơn'}</DialogTitle>
         </DialogHeader>
 
         <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 space-y-1 text-sm">
@@ -228,10 +256,275 @@ function PostInvoiceDialog({ invoice, onClose, onPosted }: {
 
         <div className="flex gap-2 justify-end pt-1">
           <Button variant="ghost" onClick={onClose} disabled={loading}>Hủy</Button>
-          <Button onClick={handlePost} disabled={loading}>
+          <Button onClick={handlePost} disabled={loading || (mode === 'edit' && !existingEntryId)}>
             <BookOpen className="h-4 w-4 mr-1.5" />
-            {loading ? 'Đang hạch toán...' : 'Hạch toán'}
+            {loading ? 'Đang lưu...' : mode === 'edit' ? 'Lưu thay đổi' : 'Hạch toán'}
           </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─── Invoice Detail Dialog (B1) ───────────────────────────────────────────────
+
+const FORMAT_LABEL: Record<string, string> = { pdf: 'PDF', xml: 'XML', html: 'HTML / E-invoice' }
+const DIRECTION_LABEL: Record<string, string> = { incoming: 'Hóa đơn mua vào', outgoing: 'Hóa đơn bán ra' }
+
+interface LineItemDraft {
+  id: string
+  description: string
+  quantity: string
+  unitPrice: string
+  amount: string
+}
+
+function InvoiceDetailDialog({ invoice, onClose, onPost, onEdit }: {
+  invoice: Invoice
+  onClose: () => void
+  onPost: () => void
+  onEdit: () => void
+}) {
+  const qc = useQueryClient()
+  const isIncoming = invoice.direction === 'incoming'
+  const [isEditing, setIsEditing] = useState(false)
+
+  // Edit form state
+  const [editDate, setEditDate] = useState(invoice.invoice_date ?? '')
+  const [editVatRate, setEditVatRate] = useState(invoice.vat_rate ?? '')
+  const [editSellerName, setEditSellerName] = useState(invoice.seller_name ?? '')
+  const [editBuyerName, setEditBuyerName] = useState(invoice.buyer_name ?? '')
+  const [editLineItems, setEditLineItems] = useState<LineItemDraft[]>(() =>
+    invoice.line_items.length > 0
+      ? (invoice.line_items as { description: string; quantity: number; unitPrice: number; amount: number }[]).map((li, i) => ({
+          id: String(i),
+          description: li.description ?? '',
+          quantity: String(li.quantity ?? ''),
+          unitPrice: String(li.unitPrice ?? ''),
+          amount: String(li.amount ?? ''),
+        }))
+      : []
+  )
+
+  function addLineItem() {
+    setEditLineItems(items => [...items, { id: crypto.randomUUID(), description: '', quantity: '1', unitPrice: '', amount: '' }])
+  }
+
+  function removeLineItem(id: string) {
+    setEditLineItems(items => items.filter(x => x.id !== id))
+  }
+
+  function updateLineItem(id: string, field: keyof LineItemDraft, value: string) {
+    setEditLineItems(items => items.map(item => {
+      if (item.id !== id) return item
+      const updated = { ...item, [field]: value }
+      // Auto-calculate amount when qty or unitPrice changes
+      if (field === 'quantity' || field === 'unitPrice') {
+        const qty = parseFloat(field === 'quantity' ? value : item.quantity) || 0
+        const price = parseFloat(field === 'unitPrice' ? value : item.unitPrice) || 0
+        updated.amount = qty && price ? String(Math.round(qty * price)) : updated.amount
+      }
+      return updated
+    }))
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const lineItems = editLineItems.map(li => ({
+        description: li.description,
+        quantity: parseFloat(li.quantity) || 0,
+        unitPrice: parseFloat(li.unitPrice) || 0,
+        amount: parseFloat(li.amount) || 0,
+      }))
+      await supabase.from('invoices').update({
+        invoice_date: editDate || null,
+        vat_rate: editVatRate || null,
+        seller_name: editSellerName || null,
+        buyer_name: editBuyerName || null,
+        line_items: lineItems,
+      }).eq('id', invoice.id)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['invoices', invoice.company_id] })
+      setIsEditing(false)
+    },
+  })
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            {isIncoming
+              ? <ArrowDownCircle className="h-5 w-5 text-orange-400" />
+              : <ArrowUpCircle className="h-5 w-5 text-green-500" />}
+            {DIRECTION_LABEL[invoice.direction]}
+            <button
+              onClick={() => setIsEditing(e => !e)}
+              className={cn('ml-auto flex items-center gap-1 text-xs px-2 py-1 rounded-lg border transition-colors',
+                isEditing ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'border-slate-200 text-slate-400 hover:text-indigo-500 hover:border-indigo-200'
+              )}
+            >
+              <Pencil className="h-3 w-3" /> {isEditing ? 'Đang sửa' : 'Sửa thông tin'}
+            </button>
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 text-sm">
+          {/* File info */}
+          <div className="flex items-center gap-3 rounded-lg bg-slate-50 border border-slate-200 px-4 py-3">
+            <FileText className="h-4 w-4 text-slate-400 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="font-medium text-slate-700 truncate">{invoice.file_name ?? '—'}</p>
+              <p className="text-xs text-slate-400">
+                {invoice.source_format ? FORMAT_LABEL[invoice.source_format] : '—'} ·
+                Nhập ngày {new Date(invoice.created_at).toLocaleDateString('vi-VN')}
+              </p>
+            </div>
+            <span className={cn('px-2 py-0.5 rounded-full text-xs border', STATUS_CLASS[invoice.status])}>
+              {STATUS_LABEL[invoice.status]}
+            </span>
+          </div>
+
+          {/* Parties */}
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { label: 'Bên bán', val: editSellerName, set: setEditSellerName, display: invoice.seller_name, mst: invoice.seller_mst },
+              { label: 'Bên mua', val: editBuyerName, set: setEditBuyerName, display: invoice.buyer_name, mst: invoice.buyer_mst },
+            ].map(({ label, val, set, display, mst }) => (
+              <div key={label} className="rounded-lg border border-slate-200 p-3 space-y-1">
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{label}</p>
+                {isEditing
+                  ? <input value={val} onChange={e => set(e.target.value)} className="w-full text-sm font-semibold text-slate-800 border-b border-slate-200 focus:border-indigo-400 focus:outline-none bg-transparent pb-0.5" />
+                  : <p className="font-semibold text-slate-800">{display ?? '—'}</p>
+                }
+                {mst && <p className="text-xs text-slate-500">MST: {mst}</p>}
+              </div>
+            ))}
+          </div>
+
+          {/* Invoice details */}
+          <div className="rounded-lg border border-slate-200 divide-y divide-slate-100">
+            <div className="flex justify-between items-center px-4 py-2.5">
+              <span className="text-slate-500">Số hóa đơn</span>
+              <span className="font-medium">{invoice.invoice_series ?? ''}/{invoice.invoice_number ?? '—'}</span>
+            </div>
+            <div className="flex justify-between items-center px-4 py-2.5">
+              <span className="text-slate-500">Ngày hóa đơn</span>
+              {isEditing
+                ? <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)} className="text-sm font-medium border border-slate-200 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-400" />
+                : <span className="font-medium">{invoice.invoice_date ? new Date(invoice.invoice_date).toLocaleDateString('vi-VN') : <span className="text-amber-500">Chưa có — bấm Sửa để điền</span>}</span>
+              }
+            </div>
+            <div className="flex justify-between items-center px-4 py-2.5">
+              <span className="text-slate-500">Thuế suất VAT</span>
+              {isEditing
+                ? <input value={editVatRate} onChange={e => setEditVatRate(e.target.value)} placeholder="10%" className="w-24 text-sm font-medium border border-slate-200 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-indigo-400 text-right" />
+                : <span className="font-medium">{invoice.vat_rate ?? <span className="text-amber-500">Chưa có</span>}</span>
+              }
+            </div>
+          </div>
+
+          {/* Line items */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Hàng hóa / Dịch vụ</p>
+              {isEditing && (
+                <button onClick={addLineItem} className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-700">
+                  <Plus className="h-3 w-3" /> Thêm dòng
+                </button>
+              )}
+            </div>
+
+            {(isEditing ? editLineItems.length > 0 : invoice.line_items.length > 0) ? (
+              <div className="rounded-lg border border-slate-200 overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50">
+                    <tr className="text-slate-500">
+                      <th className="text-left px-3 py-2">Tên hàng hóa / dịch vụ</th>
+                      <th className="text-right px-3 py-2 w-12">SL</th>
+                      <th className="text-right px-3 py-2 w-24">Đơn giá</th>
+                      <th className="text-right px-3 py-2 w-24">Thành tiền</th>
+                      {isEditing && <th className="w-8" />}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {isEditing
+                      ? editLineItems.map(li => (
+                          <tr key={li.id}>
+                            <td className="px-2 py-1">
+                              <input value={li.description} onChange={e => updateLineItem(li.id, 'description', e.target.value)} placeholder="Tên hàng hóa / dịch vụ" className="w-full border-b border-slate-200 focus:border-indigo-400 focus:outline-none text-slate-700 bg-transparent" />
+                            </td>
+                            <td className="px-2 py-1">
+                              <input value={li.quantity} onChange={e => updateLineItem(li.id, 'quantity', e.target.value)} className="w-full text-right border-b border-slate-200 focus:border-indigo-400 focus:outline-none bg-transparent" />
+                            </td>
+                            <td className="px-2 py-1">
+                              <input value={li.unitPrice} onChange={e => updateLineItem(li.id, 'unitPrice', e.target.value)} className="w-full text-right border-b border-slate-200 focus:border-indigo-400 focus:outline-none font-mono bg-transparent" />
+                            </td>
+                            <td className="px-2 py-1">
+                              <input value={li.amount} onChange={e => updateLineItem(li.id, 'amount', e.target.value)} className="w-full text-right border-b border-slate-200 focus:border-indigo-400 focus:outline-none font-mono font-medium bg-transparent" />
+                            </td>
+                            <td className="px-2 py-1 text-center">
+                              <button onClick={() => removeLineItem(li.id)} className="text-slate-300 hover:text-red-400"><X className="h-3.5 w-3.5" /></button>
+                            </td>
+                          </tr>
+                        ))
+                      : (invoice.line_items as { description: string; quantity: number; unitPrice: number; amount: number }[]).map((li, i) => (
+                          <tr key={i}>
+                            <td className="px-3 py-2 text-slate-700">{li.description}</td>
+                            <td className="px-3 py-2 text-right text-slate-500">{li.quantity}</td>
+                            <td className="px-3 py-2 text-right font-mono">{fmt(li.unitPrice)}</td>
+                            <td className="px-3 py-2 text-right font-mono font-medium">{fmt(li.amount)}</td>
+                          </tr>
+                        ))
+                    }
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className={cn('rounded-lg border px-4 py-3 text-xs', isEditing ? 'border-dashed border-indigo-200 bg-indigo-50 text-indigo-400' : 'border-slate-100 text-slate-400')}>
+                {isEditing ? 'Bấm "Thêm dòng" để nhập hàng hóa / dịch vụ' : 'Parser không đọc được dòng hàng — bấm "Sửa thông tin" để điền tay'}
+              </div>
+            )}
+          </div>
+
+          {/* Totals */}
+          <div className="rounded-lg border border-slate-200 divide-y divide-slate-100">
+            <div className="flex justify-between px-4 py-2.5 text-slate-600">
+              <span>Tiền hàng (chưa VAT)</span>
+              <span className="font-mono">{fmt(invoice.subtotal)} đ</span>
+            </div>
+            <div className="flex justify-between px-4 py-2.5 text-slate-600">
+              <span>Thuế VAT ({invoice.vat_rate ?? editVatRate})</span>
+              <span className="font-mono">{fmt(invoice.vat_amount)} đ</span>
+            </div>
+            <div className="flex justify-between px-4 py-2.5 font-bold text-slate-800">
+              <span>Tổng cộng</span>
+              <span className="font-mono text-lg">{fmt(invoice.total)} đ</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-2 justify-end pt-2 border-t border-slate-100">
+          <Button variant="ghost" onClick={onClose}>Đóng</Button>
+          {isEditing && (
+            <>
+              <Button variant="outline" onClick={() => setIsEditing(false)}>Huỷ</Button>
+              <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+                {saveMutation.isPending ? 'Đang lưu...' : 'Lưu thông tin'}
+              </Button>
+            </>
+          )}
+          {!isEditing && invoice.status === 'pending' && (
+            <Button onClick={onPost}>
+              <BookOpen className="h-4 w-4 mr-1.5" /> Hạch toán
+            </Button>
+          )}
+          {!isEditing && invoice.status === 'posted' && (
+            <Button variant="outline" onClick={onEdit}>
+              <Pencil className="h-4 w-4 mr-1.5" /> Sửa hạch toán
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -249,6 +542,8 @@ export default function InvoicesTab({ companyId, companyMst }: {
   const [dragging, setDragging] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [postingInvoice, setPostingInvoice] = useState<Invoice | null>(null)
+  const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null)
+  const [detailInvoice, setDetailInvoice] = useState<Invoice | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -266,12 +561,24 @@ export default function InvoicesTab({ companyId, companyMst }: {
 
   const deleteMutation = useMutation({
     mutationFn: async (ids: string[]) => {
+      // Check if any have journal entries
+      const targets = invoices.filter(i => ids.includes(i.id))
+      const posted = targets.filter(i => i.status === 'posted' || i.status === 'matched')
+      if (posted.length > 0) {
+        const ok = confirm(
+          `${posted.length > 1 ? `${posted.length} hóa đơn` : 'Hóa đơn này'} đã hạch toán. Xóa sẽ đồng thời xóa bút toán liên kết và ảnh hưởng đến báo cáo. Tiếp tục?`
+        )
+        if (!ok) return
+        // Cascade delete journal entries
+        await supabase.from('journal_entries').delete().in('invoice_id', ids)
+      }
       const { error } = await supabase.from('invoices').delete().in('id', ids)
       if (error) throw error
     },
     onSuccess: () => {
       setSelectedIds(new Set())
       queryClient.invalidateQueries({ queryKey: ['invoices', companyId] })
+      queryClient.invalidateQueries({ queryKey: ['all-journal-entries', companyId] })
     },
   })
 
@@ -459,9 +766,12 @@ export default function InvoicesTab({ companyId, companyMst }: {
                         <p className="text-xs font-mono text-slate-500">{inv.invoice_series}/{inv.invoice_number}</p>
                       </div>
                       <div className="col-span-2 min-w-0">
-                        <p className="text-sm font-medium text-slate-700 truncate">
+                        <button
+                          onClick={() => setDetailInvoice(inv)}
+                          className="text-sm font-medium text-slate-700 truncate hover:text-indigo-600 transition-colors text-left block w-full"
+                        >
                           {inv.direction === 'incoming' ? inv.seller_name : inv.buyer_name}
-                        </p>
+                        </button>
                         {inv.status === 'pending' && (
                           <p className="text-xs text-indigo-400">
                             Gợi ý: Nợ {suggestion.debitAccount} / Có {suggestion.creditAccount}
@@ -478,11 +788,25 @@ export default function InvoicesTab({ companyId, companyMst }: {
                       <span className={cn('px-2 py-0.5 rounded-full text-xs border', STATUS_CLASS[inv.status])}>
                         {STATUS_LABEL[inv.status]}
                       </span>
+                      <button
+                        onClick={() => setDetailInvoice(inv)}
+                        className="text-slate-300 hover:text-indigo-500 transition-colors"
+                        title="Xem chi tiết"
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                      </button>
                       {inv.status === 'pending' && (
                         <button onClick={() => setPostingInvoice(inv)}
                           className="flex items-center gap-1 px-3 py-1 bg-indigo-600 hover:bg-indigo-700
                             text-white text-xs font-medium rounded-lg transition-colors">
                           <BookOpen className="h-3 w-3" /> Hạch toán
+                        </button>
+                      )}
+                      {inv.status === 'posted' && (
+                        <button onClick={() => setEditingInvoice(inv)}
+                          className="flex items-center gap-1 px-3 py-1 bg-white hover:bg-slate-50
+                            text-slate-600 text-xs font-medium rounded-lg border border-slate-200 transition-colors">
+                          <Pencil className="h-3 w-3" /> Sửa
                         </button>
                       )}
                       <button onClick={() => setExpandedId(expanded ? null : inv.id)}
@@ -542,6 +866,33 @@ export default function InvoicesTab({ companyId, companyMst }: {
           onPosted={() => {
             setPostingInvoice(null)
             queryClient.invalidateQueries({ queryKey: ['invoices', companyId] })
+          }}
+        />
+      )}
+
+      {editingInvoice && (
+        <PostInvoiceDialog
+          invoice={editingInvoice}
+          mode="edit"
+          onClose={() => setEditingInvoice(null)}
+          onPosted={() => {
+            setEditingInvoice(null)
+            queryClient.invalidateQueries({ queryKey: ['invoices', companyId] })
+          }}
+        />
+      )}
+
+      {detailInvoice && (
+        <InvoiceDetailDialog
+          invoice={detailInvoice}
+          onClose={() => setDetailInvoice(null)}
+          onPost={() => {
+            setDetailInvoice(null)
+            setPostingInvoice(detailInvoice)
+          }}
+          onEdit={() => {
+            setDetailInvoice(null)
+            setEditingInvoice(detailInvoice)
           }}
         />
       )}

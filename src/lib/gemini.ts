@@ -110,23 +110,35 @@ function scoreMatch(bt: BankTxInput, inv: InvoiceInput): number {
 
 export async function autoMatchTransactions(
   bankTxs: BankTxInput[],
-  invoices: InvoiceInput[]
+  invoices: InvoiceInput[],
+  bankAccountCode: string = '112'
 ): Promise<GeminiMatchResult[]> {
   const usedInvoices = new Set<string>()
 
   return bankTxs.map(bt => {
-    // Chỉ match khoản chi (số âm)
+    // Income (amount > 0): suggest revenue entry
+    if (bt.amount > 0) {
+      return {
+        bank_tx_id: bt.id,
+        invoice_id: null,
+        debit_account: bankAccountCode,
+        credit_account: '511',
+        vat_account: '3331',
+        confidence: 0.6,
+        reason: 'Khoản thu vào — đề xuất ghi nhận doanh thu (TK 511)',
+      }
+    }
+
+    // Expense (amount < 0): try to match an invoice
     let bestInvoice: InvoiceInput | null = null
     let bestScore = 0
 
-    if (bt.amount < 0) {
-      for (const inv of invoices) {
-        if (usedInvoices.has(inv.id)) continue
-        const score = scoreMatch(bt, inv)
-        if (score > bestScore) {
-          bestScore = score
-          bestInvoice = inv
-        }
+    for (const inv of invoices) {
+      if (usedInvoices.has(inv.id)) continue
+      const score = scoreMatch(bt, inv)
+      if (score > bestScore) {
+        bestScore = score
+        bestInvoice = inv
       }
     }
 
@@ -153,7 +165,7 @@ export async function autoMatchTransactions(
       bank_tx_id: bt.id,
       invoice_id: bestInvoice?.id ?? null,
       debit_account: debit,
-      credit_account: '112',
+      credit_account: bankAccountCode,
       vat_account: hasVAT ? '133' : null,
       confidence,
       reason,

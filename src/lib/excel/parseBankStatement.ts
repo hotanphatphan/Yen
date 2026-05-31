@@ -140,8 +140,19 @@ function applyMapping(rows: unknown[][], m: ColumnMapping): ParsedBankRow[] {
   return results
 }
 
-export async function parseBankStatementWithGemini(buffer: ArrayBuffer): Promise<ParsedBankRow[]> {
-  const wb = XLSX.read(buffer, { type: 'array', codepage: 1258 })
+export async function parseBankStatementWithGemini(fileOrBuffer: File | ArrayBuffer): Promise<ParsedBankRow[]> {
+  let wb: XLSX.WorkBook
+  if (fileOrBuffer instanceof File) {
+    if (fileOrBuffer.name.toLowerCase().endsWith('.csv')) {
+      const text = await fileOrBuffer.text()
+      wb = XLSX.read(text, { type: 'string' })
+    } else {
+      const buffer = await fileOrBuffer.arrayBuffer()
+      wb = XLSX.read(buffer, { type: 'array', codepage: 1258 })
+    }
+  } else {
+    wb = XLSX.read(fileOrBuffer, { type: 'array', codepage: 1258 })
+  }
   const ws = wb.Sheets[wb.SheetNames[0]]
   const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1 }) as unknown[][]
 
