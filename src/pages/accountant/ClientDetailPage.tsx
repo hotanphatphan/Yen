@@ -1,7 +1,11 @@
 import { useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { AccountantLayout, PageHeader } from '@/components/shared/AccountantLayout'
-import { useCompany } from '@/hooks/useCompanies'
+import { useCompany, useDeleteCompany } from '@/hooks/useCompanies'
+import { Button } from '@/components/shared/Button'
+import { Input } from '@/components/shared/Input'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/shared/Dialog'
+import { Trash2 } from 'lucide-react'
 import ComplianceTab from '../client-detail-tabs/ComplianceTab'
 import DocumentsTab from '../client-detail-tabs/DocumentsTab'
 import BankReconciliationTab from '../client-detail-tabs/BankReconciliationTab'
@@ -46,10 +50,20 @@ const ALL_ITEMS = NAV_GROUPS.flatMap(g => g.items)
 
 export default function ClientDetailPage() {
   const { companyId } = useParams<{ companyId: string }>()
+  const navigate = useNavigate()
   const { data: company, isLoading } = useCompany(companyId)
+  const deleteCompany = useDeleteCompany()
   const [active, setActive] = useState<TabKey>('bank')
   const [taxSub, setTaxSub] = useState<TaxSub>('vat')
   const [settingsSub, setSettingsSub] = useState<SettingsSub>('documents-inner')
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteConfirmText, setDeleteConfirmText] = useState('')
+
+  async function handleDelete() {
+    if (!company) return
+    await deleteCompany.mutateAsync(company.id)
+    navigate('/clients')
+  }
 
   if (isLoading) {
     return (
@@ -219,11 +233,55 @@ export default function ClientDetailPage() {
               </div>
               {settingsSub === 'accounts' && <ChartOfAccountsTab companyId={company.id} />}
               {settingsSub === 'invoice-template' && <InvoiceWorkflowTab companyId={company.id} />}
+
+              {/* Danger zone */}
+              <div className="rounded-2xl border border-red-200 bg-red-50/50 p-5 space-y-3">
+                <div>
+                  <p className="text-sm font-semibold text-red-700">Xóa khách hàng</p>
+                  <p className="text-xs text-red-500/80 mt-0.5">
+                    Thao tác này sẽ xóa vĩnh viễn "{company.name}" cùng toàn bộ dữ liệu liên quan: chứng từ, hóa đơn, bút toán, giao dịch ngân hàng, kê khai thuế... Không thể hoàn tác.
+                  </p>
+                </div>
+                <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
+                  <Trash2 className="h-4 w-4" />
+                  Xóa khách hàng
+                </Button>
+              </div>
             </div>
           )}
 
         </main>
       </div>
+
+      <Dialog open={deleteOpen} onOpenChange={(v) => { setDeleteOpen(v); if (!v) setDeleteConfirmText('') }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Xóa khách hàng "{company.name}"?</DialogTitle>
+            <DialogDescription>
+              Toàn bộ dữ liệu của khách hàng này (chứng từ, hóa đơn, bút toán, giao dịch ngân hàng, kê khai thuế, hệ thống tài khoản...) sẽ bị xóa vĩnh viễn và không thể khôi phục.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <p className="text-xs text-slate-500">Gõ lại tên khách hàng <span className="font-semibold">{company.name}</span> để xác nhận:</p>
+            <Input
+              value={deleteConfirmText}
+              onChange={e => setDeleteConfirmText(e.target.value)}
+              placeholder={company.name}
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={() => setDeleteOpen(false)}>Hủy</Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={deleteConfirmText !== company.name || deleteCompany.isPending}
+              onClick={handleDelete}
+            >
+              {deleteCompany.isPending ? 'Đang xóa...' : 'Xóa vĩnh viễn'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </AccountantLayout>
   )
 }
