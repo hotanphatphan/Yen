@@ -696,9 +696,13 @@ export default function InvoicesTab({ companyId, companyMst }: {
     next.has(id) ? next.delete(id) : next.add(id)
     return next
   })
-  const toggleAll = (ids: string[]) => setSelectedIds(prev =>
-    prev.size === ids.length ? new Set() : new Set(ids)
-  )
+  const toggleAll = (ids: string[]) => setSelectedIds(prev => {
+    const allSelected = ids.length > 0 && ids.every(id => prev.has(id))
+    const next = new Set(prev)
+    if (allSelected) ids.forEach(id => next.delete(id))
+    else ids.forEach(id => next.add(id))
+    return next
+  })
 
   const saveMutation = useMutation({
     mutationFn: async (parsed: ParsedInvoice) => {
@@ -861,12 +865,16 @@ export default function InvoicesTab({ companyId, companyMst }: {
       <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              className="rounded"
-              checked={selectedIds.size > 0 && selectedIds.size === filteredInvoices.length}
-              onChange={() => toggleAll(filteredInvoices.map(i => i.id))}
-            />
+            <label className="flex items-center gap-1.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                className="rounded"
+                ref={el => { if (el) el.indeterminate = filteredInvoices.some(i => selectedIds.has(i.id)) && !filteredInvoices.every(i => selectedIds.has(i.id)) }}
+                checked={filteredInvoices.length > 0 && filteredInvoices.every(i => selectedIds.has(i.id))}
+                onChange={() => toggleAll(filteredInvoices.map(i => i.id))}
+              />
+              <span className="text-xs text-slate-400">Chọn tất cả</span>
+            </label>
             <h3 className="text-sm font-semibold text-slate-700">
               Kho hóa đơn
               <span className="ml-2 text-xs font-normal text-slate-400">
