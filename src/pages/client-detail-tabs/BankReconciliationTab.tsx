@@ -10,9 +10,10 @@ import { Label } from '@/components/shared/Label'
 import { supabase } from '@/lib/supabase'
 import { parseBankStatementWithGemini } from '@/lib/excel/parseBankStatement'
 import { autoMatchTransactions } from '@/lib/gemini'
-import type { BankTransaction, BankAccount, Invoice } from '@/types'
+import type { BankTransaction, BankAccount, Invoice, AccountType } from '@/types'
 import { formatDate, formatVND } from '@/lib/utils'
-import { COMMON_ACCOUNTS } from '@/lib/accountSuggestion'
+import { COMMON_ACCOUNTS, getAccountName } from '@/lib/accountSuggestion'
+import { AccountPicker, type AccountOption } from '@/components/shared/AccountPicker'
 import { cn } from '@/lib/utils'
 import CashLedgerTab from './CashLedgerTab'
 import { SectionButToanDieuChinh } from './LedgerTab'
@@ -251,6 +252,46 @@ function StatementsSection({ companyId }: { companyId: string }) {
     },
   })
 
+  // Danh mục tài khoản công ty (có cả tk con) cho ô chọn tài khoản có tìm kiếm
+  const { data: dbAccounts = [] } = useQuery({
+    queryKey: ['accounts', companyId],
+    queryFn: async () => {
+      const { data } = await supabase.from('accounts')
+        .select('code, name, type, parent_code').eq('company_id', companyId).order('code')
+      return (data ?? []) as { code: string; name: string; type: AccountType; parent_code: string | null }[]
+    },
+  })
+
+  const accountOptions = useMemo<AccountOption[]>(() => {
+    const map = new Map<string, string>()
+    for (const a of COMMON_ACCOUNTS) map.set(a.code, a.name)
+    for (const a of dbAccounts) map.set(a.code, a.name)
+    return [...map.entries()].map(([code, name]) => ({ code, name })).sort((x, y) => x.code.localeCompare(y.code))
+  }, [dbAccounts])
+
+  // Ghi nhớ tk con mới → lưu vào danh mục accounts để lần sau tự gợi ý
+  async function rememberAccounts(codes: string[]) {
+    const existing = new Set(dbAccounts.map(a => a.code))
+    const newCodes = [...new Set(codes.filter(Boolean))].filter(c => !existing.has(c))
+    if (newCodes.length === 0) return
+    const rows = newCodes.map(code => {
+      const parentCode = code.length > 3 ? code.slice(0, 3) : null
+      const parent = dbAccounts.find(a => a.code === parentCode)
+      const known = getAccountName(code)
+      return {
+        company_id: companyId,
+        code,
+        name: known !== code ? known : parent ? `${parent.name} (${code})` : `Tài khoản ${code}`,
+        type: (parent?.type ?? 'expense') as AccountType,
+        parent_code: parent ? parentCode : null,
+      }
+    })
+    try {
+      await supabase.from('accounts').upsert(rows, { onConflict: 'company_id,code', ignoreDuplicates: true })
+      qc.invalidateQueries({ queryKey: ['accounts', companyId] })
+    } catch { /* ghi nhớ là phụ, lỗi không chặn thao tác chính */ }
+  }
+
   const { data: pendingInvoices = [] } = useQuery({
     queryKey: ['invoices', companyId, 'pending-for-match'],
     queryFn: async () => {
@@ -392,6 +433,9 @@ function StatementsSection({ companyId }: { companyId: string }) {
     if (!sg) return
     setConfirming(prev => new Set(prev).add(bt.id))
     try {
+      // Ghi nhớ tk con mới (nếu kế toán vừa gõ)
+      rememberAccounts([sg.debitAccount, sg.creditAccount, sg.vatAccount].filter(Boolean) as string[])
+
       const desc = sg.isIncome
         ? `Doanh thu${sg.customerName ? ` từ ${sg.customerName}` : ''}${sg.outInvoiceNo ? ` - HĐ ${sg.outInvoiceNo}` : ''}`
         : bt.description
@@ -716,6 +760,7 @@ function StatementsSection({ companyId }: { companyId: string }) {
                 onEditData={setEditData}
                 onUpdateSuggestion={patch => updateEdit(bt.id, patch)}
                 onDelete={() => { if (confirm('Xóa giao dịch này?')) deleteMutation.mutate([bt.id]) }}
+                accounts={accountOptions}
               />
             )
           })}
@@ -751,6 +796,7 @@ function StatementsSection({ companyId }: { companyId: string }) {
                 onEditData={setEditData}
                 onUpdateSuggestion={patch => updateEdit(bt.id, patch)}
                 onDelete={() => { if (confirm('Xóa giao dịch này?')) deleteMutation.mutate([bt.id]) }}
+                accounts={accountOptions}
                 isManual
               />
             )
@@ -834,23 +880,25 @@ function StatementsSection({ companyId }: { companyId: string }) {
                             <div className="grid grid-cols-2 gap-2">
                               <div>
                                 <label className="text-xs text-slate-500 mb-1 block">TK Nợ</label>
-                                <select
-                                  value={matchedEditForm.debitAccount}
-                                  onChange={e => setMatchedEditForm(f => ({ ...f, debitAccount: e.target.value }))}
-                                  className="w-full h-7 text-xs rounded border border-slate-200 px-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-400"
-                                >
-                                  {COMMON_ACCOUNTS.map(a => <option key={a.code} value={a.code}>{a.code} — {a.name}</option>)}
-                                </select>
+                                <div className="h-7 flex items-center rounded border border-slate-200 px-1.5">
+                                  <AccountPicker
+                                    value={matchedEditForm.debitAccount}
+                                    onChange={code => setMatchedEditForm(f => ({ ...f, debitAccount: code }))}
+                                    accounts={accountOptions}
+                                    className="text-xs"
+                                  />
+                                </div>
                               </div>
                               <div>
                                 <label className="text-xs text-slate-500 mb-1 block">TK Có</label>
-                                <select
-                                  value={matchedEditForm.creditAccount}
-                                  onChange={e => setMatchedEditForm(f => ({ ...f, creditAccount: e.target.value }))}
-                                  className="w-full h-7 text-xs rounded border border-slate-200 px-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-400"
-                                >
-                                  {COMMON_ACCOUNTS.map(a => <option key={a.code} value={a.code}>{a.code} — {a.name}</option>)}
-                                </select>
+                                <div className="h-7 flex items-center rounded border border-slate-200 px-1.5">
+                                  <AccountPicker
+                                    value={matchedEditForm.creditAccount}
+                                    onChange={code => setMatchedEditForm(f => ({ ...f, creditAccount: code }))}
+                                    accounts={accountOptions}
+                                    className="text-xs"
+                                  />
+                                </div>
                               </div>
                             </div>
                             <div>
@@ -864,7 +912,10 @@ function StatementsSection({ companyId }: { companyId: string }) {
                             <div className="flex gap-2 justify-end">
                               <button onClick={() => setEditingMatchedId(null)} className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1">Huỷ</button>
                               <button
-                                onClick={() => updateJournalMutation.mutate({ journalId: matchedJournalId, ...matchedEditForm })}
+                                onClick={() => {
+                                  rememberAccounts([matchedEditForm.debitAccount, matchedEditForm.creditAccount])
+                                  updateJournalMutation.mutate({ journalId: matchedJournalId, ...matchedEditForm })
+                                }}
                                 disabled={updateJournalMutation.isPending}
                                 className="text-xs bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700 disabled:opacity-50"
                               >
@@ -893,7 +944,7 @@ function StatementsSection({ companyId }: { companyId: string }) {
 function TxSuggestionCard({
   bt, sg, isConfirming, isSelected, isEditing, editData,
   onToggleSelect, onConfirm, onEdit, onSaveEdit, onCancelEdit,
-  onEditData, onUpdateSuggestion, onDelete, isManual = false,
+  onEditData, onUpdateSuggestion, onDelete, accounts, isManual = false,
 }: {
   bt: BankTransaction
   sg: TxSuggestion
@@ -909,6 +960,7 @@ function TxSuggestionCard({
   onEditData: (d: { description: string; amount: string; date: string }) => void
   onUpdateSuggestion: (p: Partial<TxSuggestion>) => void
   onDelete: () => void
+  accounts: AccountOption[]
   isManual?: boolean
 }) {
   const hasInvoiceMatch = !!sg.matchedInvoiceId
@@ -986,21 +1038,23 @@ function TxSuggestionCard({
           {!isEditing && (
             <div className="mt-2 flex gap-2 flex-wrap items-center">
               <span className="text-xs text-slate-500">Nợ:</span>
-              <select
-                value={sg.debitAccount}
-                onChange={e => onUpdateSuggestion({ debitAccount: e.target.value })}
-                className="text-xs border border-slate-200 rounded px-2 py-1 focus:outline-none bg-white"
-              >
-                {COMMON_ACCOUNTS.map(a => <option key={a.code} value={a.code}>{a.label}</option>)}
-              </select>
+              <div className="min-w-[150px] text-xs border border-slate-200 rounded px-2 py-1 bg-white">
+                <AccountPicker
+                  value={sg.debitAccount}
+                  onChange={code => onUpdateSuggestion({ debitAccount: code })}
+                  accounts={accounts}
+                  className="text-xs"
+                />
+              </div>
               <span className="text-xs text-slate-500">Có:</span>
-              <select
-                value={sg.creditAccount}
-                onChange={e => onUpdateSuggestion({ creditAccount: e.target.value })}
-                className="text-xs border border-slate-200 rounded px-2 py-1 focus:outline-none bg-white"
-              >
-                {COMMON_ACCOUNTS.map(a => <option key={a.code} value={a.code}>{a.label}</option>)}
-              </select>
+              <div className="min-w-[150px] text-xs border border-slate-200 rounded px-2 py-1 bg-white">
+                <AccountPicker
+                  value={sg.creditAccount}
+                  onChange={code => onUpdateSuggestion({ creditAccount: code })}
+                  accounts={accounts}
+                  className="text-xs"
+                />
+              </div>
             </div>
           )}
         </div>

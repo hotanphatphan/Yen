@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/shared/Dialog'
 import { Button } from '@/components/shared/Button'
+import { AccountPicker } from '@/components/shared/AccountPicker'
 import { supabase } from '@/lib/supabase'
 import { suggestAccounts, COMMON_ACCOUNTS, getAccountName } from '@/lib/accountSuggestion'
 import { cn } from '@/lib/utils'
@@ -153,10 +154,10 @@ function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
 
   const accountOptions = useMemo(() => {
     const map = new Map<string, string>()
-    for (const a of COMMON_ACCOUNTS) map.set(a.code, a.label)
-    for (const a of dbAccounts) map.set(a.code, `${a.code} — ${a.name}`)
+    for (const a of COMMON_ACCOUNTS) map.set(a.code, a.name)
+    for (const a of dbAccounts) map.set(a.code, a.name)
     return [...map.entries()]
-      .map(([code, label]) => ({ code, label }))
+      .map(([code, name]) => ({ code, name }))
       .sort((x, y) => x.code.localeCompare(y.code))
   }, [dbAccounts])
 
@@ -274,14 +275,9 @@ function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
           </div>
         </div>
 
-        {/* Danh mục tài khoản gợi ý cho các ô combobox — gõ tay được mã tk con */}
-        <datalist id="account-options">
-          {accountOptions.map(a => <option key={a.code} value={a.code}>{a.label}</option>)}
-        </datalist>
-
         <div className="space-y-3">
           <p className="text-sm font-semibold text-slate-600">Bút toán hạch toán</p>
-          <p className="text-xs text-slate-400 -mt-1">Có thể gõ tay mã tài khoản con (VD 6421) — app sẽ tự nhớ cho lần sau.</p>
+          <p className="text-xs text-slate-400 -mt-1">Bấm để chọn, gõ để tìm theo mã/tên. Cần tài khoản con mới (VD 6421) thì gõ mã — app tự nhớ cho lần sau.</p>
           <div className="rounded-xl border border-slate-200 divide-y divide-slate-100 text-sm overflow-hidden">
             {[
               { label: 'Nợ', value: debitAccount, onChange: setDebitAccount, amount: invoice.subtotal },
@@ -289,9 +285,7 @@ function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
             ].map(({ label, value, onChange, amount }) => (
               <div key={label} className="flex items-center gap-3 px-4 py-2.5 odd:bg-slate-50">
                 <span className="w-8 text-xs font-bold text-slate-400">{label}</span>
-                <input list="account-options" value={value} onChange={e => onChange(e.target.value)}
-                  placeholder="Mã tài khoản"
-                  className="flex-1 bg-transparent text-slate-700 focus:outline-none text-sm" />
+                <AccountPicker value={value} onChange={onChange} accounts={accountOptions} placeholder="Chọn tài khoản" className="flex-1" />
                 <span className="font-mono text-slate-600 text-xs">{fmt(amount)}</span>
               </div>
             ))}
@@ -307,9 +301,7 @@ function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
                 ].map(({ label, value, onChange }) => (
                   <div key={label} className="flex items-center gap-3 px-4 py-2.5 odd:bg-slate-50">
                     <span className="w-8 text-xs font-bold text-slate-400">{label}</span>
-                    <input list="account-options" value={value} onChange={e => onChange(e.target.value)}
-                      placeholder="— Không có —"
-                      className="flex-1 bg-transparent text-slate-700 focus:outline-none text-sm" />
+                    <AccountPicker value={value} onChange={onChange} accounts={accountOptions} placeholder="— Không có —" allowEmpty className="flex-1" />
                     <span className="font-mono text-slate-600 text-xs">{fmt(invoice.vat_amount)}</span>
                   </div>
                 ))}
