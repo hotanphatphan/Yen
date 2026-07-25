@@ -43,7 +43,7 @@ interface TxSuggestion {
   outInvoiceNo: string
 }
 
-type ImportStatus = { type: 'success'; count: number; fileName: string } | { type: 'error'; message: string } | null
+type ImportStatus = { type: 'success'; count: number; fileName: string; note?: string } | { type: 'error'; message: string } | null
 
 // ─── Bank Accounts Section ────────────────────────────────────────────────────
 
@@ -331,33 +331,60 @@ function StatementsSection({ companyId }: { companyId: string }) {
     setImportStatus(null)
     try {
       const rows = await parseBankStatementWithGemini(file)
-      const { data: stmt } = await supabase.from('bank_statements').insert({
+      if (rows.length === 0) {
+        setImportStatus({ type: 'error', message: 'Không đọc được giao dịch nào từ file. Kiểm tra lại các cột ngày / diễn giải / số tiền trong file.' })
+        return
+      }
+
+      // Cột "date" trong DB là NOT NULL — chỉ cần 1 dòng ngày sai là cả lô insert bị hỏng.
+      // Vì vậy lọc bỏ dòng không có ngày hợp lệ (YYYY-MM-DD) trước khi lưu.
+      const isValidDate = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d)
+      const validRows = rows.filter(r => isValidDate(r.date))
+      const skipped = rows.length - validRows.length
+      if (validRows.length === 0) {
+        setImportStatus({ type: 'error', message: `Đọc được ${rows.length} dòng nhưng không dòng nào có ngày hợp lệ. Kiểm tra lại cột ngày (định dạng ngày/tháng/năm) trong file.` })
+        return
+      }
+
+      const { data: stmt, error: stmtErr } = await supabase.from('bank_statements').insert({
         company_id: companyId,
         file_name: file.name,
         bank_account_id: selectedBankAccountId || null,
       }).select().single()
+      if (stmtErr) throw stmtErr
+      if (!stmt) throw new Error('Không tạo được bản ghi sao kê.')
 
-      if (stmt && rows.length > 0) {
-        await supabase.from('bank_transactions').insert(
-          rows.map(r => ({
-            statement_id: stmt.id,
-            company_id: companyId,
-            date: r.date,
-            description: r.description,
-            amount: r.amount,
-            balance: r.balance,
-            bank_account_id: selectedBankAccountId || null,
-            status: 'unmatched',
-          }))
-        )
-        qc.invalidateQueries({ queryKey: ['bank-transactions', companyId] })
-        setImportStatus({ type: 'success', count: rows.length, fileName: file.name })
+      const { error: txErr } = await supabase.from('bank_transactions').insert(
+        validRows.map(r => ({
+          statement_id: stmt.id,
+          company_id: companyId,
+          date: r.date,
+          description: r.description || '(không có diễn giải)',
+          amount: r.amount,
+          balance: r.balance,
+          bank_account_id: selectedBankAccountId || null,
+          status: 'unmatched',
+        }))
+      )
+      if (txErr) {
+        // Lưu giao dịch thất bại → xóa luôn bản ghi sao kê rỗng để không để lại rác
+        await supabase.from('bank_statements').delete().eq('id', stmt.id)
+        throw txErr
       }
+
+      qc.invalidateQueries({ queryKey: ['bank-transactions', companyId] })
+      setImportStatus({
+        type: 'success',
+        count: validRows.length,
+        fileName: file.name,
+        note: skipped > 0 ? `${skipped} dòng bị bỏ qua do thiếu/sai ngày.` : undefined,
+      })
     } catch (err) {
       setImportStatus({ type: 'error', message: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setParsing(false)
+      e.target.value = ''
     }
-    setParsing(false)
-    e.target.value = ''
   }
 
   async function confirmTx(bt: BankTransaction) {
@@ -579,7 +606,8 @@ function StatementsSection({ companyId }: { companyId: string }) {
           <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
           <div className="text-sm flex-1">
             <p className="font-medium text-green-800">Import thành công!</p>
-            <p className="text-green-700">Đã đọc <strong>{importStatus.count}</strong> giao dịch từ <em>{importStatus.fileName}</em></p>
+            <p className="text-green-700">Đã lưu <strong>{importStatus.count}</strong> giao dịch từ <em>{importStatus.fileName}</em></p>
+            {importStatus.note && <p className="text-amber-600 text-xs mt-0.5">{importStatus.note}</p>}
           </div>
           <button onClick={() => setImportStatus(null)} className="text-green-400 hover:text-green-600">
             <XCircle className="h-4 w-4" />
