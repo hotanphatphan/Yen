@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { Upload, Plus, CheckCircle2, AlertCircle, XCircle, Trash2, Pencil,
   Landmark, ChevronDown, ChevronUp, Link2, Sparkles, Check } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -16,6 +16,15 @@ import { COMMON_ACCOUNTS } from '@/lib/accountSuggestion'
 import { cn } from '@/lib/utils'
 import CashLedgerTab from './CashLedgerTab'
 import { SectionButToanDieuChinh } from './LedgerTab'
+
+// Suy ra năm / tháng / quý từ ngày giao dịch (dùng cho kho sao kê)
+function periodOf(dateStr: string | null): { year: number; month: number; quarter: number } | null {
+  if (!dateStr) return null
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return null
+  const month = d.getMonth() + 1
+  return { year: d.getFullYear(), month, quarter: Math.ceil(month / 3) }
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -193,6 +202,11 @@ function StatementsSection({ companyId }: { companyId: string }) {
   const [editingMatchedId, setEditingMatchedId] = useState<string | null>(null)
   const [matchedEditForm, setMatchedEditForm] = useState({ debitAccount: '', creditAccount: '', description: '' })
   const [matchedJournalId, setMatchedJournalId] = useState<string | null>(null)
+
+  // Kho sao kê: lọc theo năm / quý / tháng
+  const [filterYear, setFilterYear] = useState<number | 'all'>('all')
+  const [filterQuarter, setFilterQuarter] = useState<number | 'all'>('all')
+  const [filterMonth, setFilterMonth] = useState<number | 'all'>('all')
 
   // Month close marker — stored in localStorage per company
   const now = new Date()
@@ -456,8 +470,27 @@ function StatementsSection({ companyId }: { companyId: string }) {
     })
   }
 
-  const unmatched = bankTransactions.filter(t => t.status === 'unmatched')
-  const matched = bankTransactions.filter(t => t.status === 'matched')
+  const availableYears = useMemo(() => {
+    const ys = new Set<number>()
+    for (const t of bankTransactions) {
+      const p = periodOf(t.date)
+      if (p) ys.add(p.year)
+    }
+    return [...ys].sort((a, b) => b - a)
+  }, [bankTransactions])
+
+  const filtering = filterYear !== 'all' || filterQuarter !== 'all' || filterMonth !== 'all'
+
+  const periodFiltered = useMemo(() => bankTransactions.filter(t => {
+    const p = periodOf(t.date)
+    if (filterYear !== 'all' && (!p || p.year !== filterYear)) return false
+    if (filterQuarter !== 'all' && (!p || p.quarter !== filterQuarter)) return false
+    if (filterMonth !== 'all' && (!p || p.month !== filterMonth)) return false
+    return true
+  }), [bankTransactions, filterYear, filterQuarter, filterMonth])
+
+  const unmatched = periodFiltered.filter(t => t.status === 'unmatched')
+  const matched = periodFiltered.filter(t => t.status === 'matched')
 
   const highConf = unmatched.filter(t => (getSuggestion(t.id)?.confidence ?? 0) >= 0.5)
   const lowConf = unmatched.filter(t => (getSuggestion(t.id)?.confidence ?? 0) < 0.5 || !getSuggestion(t.id))
@@ -575,8 +608,45 @@ function StatementsSection({ companyId }: { companyId: string }) {
         </Card>
       )}
 
-      {/* Summary chips */}
+      {/* Kho sao kê: lọc theo kỳ */}
       {bankTransactions.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-100 bg-slate-50/60">
+          <span className="text-xs text-slate-400">Lọc theo kỳ:</span>
+          <select value={filterYear} onChange={e => setFilterYear(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+            className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400">
+            <option value="all">Tất cả năm</option>
+            {availableYears.map(y => <option key={y} value={y}>Năm {y}</option>)}
+          </select>
+          <select value={filterQuarter} onChange={e => setFilterQuarter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+            className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400">
+            <option value="all">Tất cả quý</option>
+            {[1, 2, 3, 4].map(q => <option key={q} value={q}>Quý {q}</option>)}
+          </select>
+          <select value={filterMonth} onChange={e => setFilterMonth(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+            className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400">
+            <option value="all">Tất cả tháng</option>
+            {Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>Tháng {m}</option>)}
+          </select>
+          {filtering && (
+            <>
+              <button onClick={() => { setFilterYear('all'); setFilterQuarter('all'); setFilterMonth('all') }}
+                className="text-xs text-indigo-500 hover:text-indigo-600 ml-1">Xóa lọc</button>
+              <span className="text-xs text-slate-400 ml-auto">{periodFiltered.length} giao dịch trong kỳ</span>
+            </>
+          )}
+        </div>
+      )}
+
+      {bankTransactions.length > 0 && periodFiltered.length === 0 && (
+        <Card>
+          <CardContent className="text-center py-10 text-slate-400 text-sm">
+            Không có giao dịch nào trong kỳ đã chọn
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Summary chips */}
+      {periodFiltered.length > 0 && (
         <div className="flex gap-3 text-sm">
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700">
             <AlertCircle className="h-3.5 w-3.5" />
