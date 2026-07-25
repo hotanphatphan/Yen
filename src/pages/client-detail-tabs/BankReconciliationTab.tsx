@@ -292,6 +292,21 @@ function StatementsSection({ companyId }: { companyId: string }) {
     } catch { /* ghi nhớ là phụ, lỗi không chặn thao tác chính */ }
   }
 
+  // Thêm tài khoản con mới kèm tên, lưu ngay vào danh mục
+  async function createAccount(code: string, name: string) {
+    const parentCode = code.length > 3 ? code.slice(0, 3) : null
+    const parent = dbAccounts.find(a => a.code === parentCode)
+    const finalName = name || (getAccountName(code) !== code ? getAccountName(code) : parent ? `${parent.name} (${code})` : `Tài khoản ${code}`)
+    await supabase.from('accounts').upsert({
+      company_id: companyId,
+      code,
+      name: finalName,
+      type: (parent?.type ?? 'expense') as AccountType,
+      parent_code: parent ? parentCode : null,
+    }, { onConflict: 'company_id,code' })
+    qc.invalidateQueries({ queryKey: ['accounts', companyId] })
+  }
+
   const { data: pendingInvoices = [] } = useQuery({
     queryKey: ['invoices', companyId, 'pending-for-match'],
     queryFn: async () => {
@@ -781,6 +796,7 @@ function StatementsSection({ companyId }: { companyId: string }) {
                 onUpdateSuggestion={patch => updateEdit(bt.id, patch)}
                 onDelete={() => { if (confirm('Xóa giao dịch này?')) deleteMutation.mutate([bt.id]) }}
                 accounts={accountOptions}
+                onCreateAccount={createAccount}
               />
             )
           })}
@@ -817,6 +833,7 @@ function StatementsSection({ companyId }: { companyId: string }) {
                 onUpdateSuggestion={patch => updateEdit(bt.id, patch)}
                 onDelete={() => { if (confirm('Xóa giao dịch này?')) deleteMutation.mutate([bt.id]) }}
                 accounts={accountOptions}
+                onCreateAccount={createAccount}
                 isManual
               />
             )
@@ -905,6 +922,7 @@ function StatementsSection({ companyId }: { companyId: string }) {
                                     value={matchedEditForm.debitAccount}
                                     onChange={code => setMatchedEditForm(f => ({ ...f, debitAccount: code }))}
                                     accounts={accountOptions}
+                                    onCreate={createAccount}
                                     className="text-xs"
                                   />
                                 </div>
@@ -916,6 +934,7 @@ function StatementsSection({ companyId }: { companyId: string }) {
                                     value={matchedEditForm.creditAccount}
                                     onChange={code => setMatchedEditForm(f => ({ ...f, creditAccount: code }))}
                                     accounts={accountOptions}
+                                    onCreate={createAccount}
                                     className="text-xs"
                                   />
                                 </div>
@@ -964,7 +983,7 @@ function StatementsSection({ companyId }: { companyId: string }) {
 function TxSuggestionCard({
   bt, sg, isConfirming, isSelected, isEditing, editData,
   onToggleSelect, onConfirm, onEdit, onSaveEdit, onCancelEdit,
-  onEditData, onUpdateSuggestion, onDelete, accounts, isManual = false,
+  onEditData, onUpdateSuggestion, onDelete, accounts, onCreateAccount, isManual = false,
 }: {
   bt: BankTransaction
   sg: TxSuggestion
@@ -981,6 +1000,7 @@ function TxSuggestionCard({
   onUpdateSuggestion: (p: Partial<TxSuggestion>) => void
   onDelete: () => void
   accounts: AccountOption[]
+  onCreateAccount: (code: string, name: string) => Promise<void> | void
   isManual?: boolean
 }) {
   const hasInvoiceMatch = !!sg.matchedInvoiceId
@@ -1063,6 +1083,7 @@ function TxSuggestionCard({
                   value={sg.debitAccount}
                   onChange={code => onUpdateSuggestion({ debitAccount: code })}
                   accounts={accounts}
+                  onCreate={onCreateAccount}
                   className="text-xs"
                 />
               </div>
@@ -1072,6 +1093,7 @@ function TxSuggestionCard({
                   value={sg.creditAccount}
                   onChange={code => onUpdateSuggestion({ creditAccount: code })}
                   accounts={accounts}
+                  onCreate={onCreateAccount}
                   className="text-xs"
                 />
               </div>

@@ -184,6 +184,21 @@ function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
     } catch { /* ghi nhớ là phụ, lỗi không chặn hạch toán */ }
   }
 
+  // Thêm tài khoản con mới kèm tên, lưu ngay vào danh mục
+  async function createAccount(code: string, name: string) {
+    const parentCode = code.length > 3 ? code.slice(0, 3) : null
+    const parent = dbAccounts.find(a => a.code === parentCode)
+    const finalName = name || (getAccountName(code) !== code ? getAccountName(code) : parent ? `${parent.name} (${code})` : `Tài khoản ${code}`)
+    await supabase.from('accounts').upsert({
+      company_id: invoice.company_id,
+      code,
+      name: finalName,
+      type: (parent?.type ?? 'expense') as AccountType,
+      parent_code: parent ? parentCode : null,
+    }, { onConflict: 'company_id,code' })
+    qc.invalidateQueries({ queryKey: ['accounts', invoice.company_id] })
+  }
+
   // In edit mode, load existing journal entry and prefill
   useEffect(() => {
     if (mode !== 'edit') return
@@ -285,7 +300,7 @@ function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
             ].map(({ label, value, onChange, amount }) => (
               <div key={label} className="flex items-center gap-3 px-4 py-2.5 odd:bg-slate-50">
                 <span className="w-8 text-xs font-bold text-slate-400">{label}</span>
-                <AccountPicker value={value} onChange={onChange} accounts={accountOptions} placeholder="Chọn tài khoản" className="flex-1" />
+                <AccountPicker value={value} onChange={onChange} accounts={accountOptions} onCreate={createAccount} placeholder="Chọn tài khoản" className="flex-1" />
                 <span className="font-mono text-slate-600 text-xs">{fmt(amount)}</span>
               </div>
             ))}
@@ -301,7 +316,7 @@ function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
                 ].map(({ label, value, onChange }) => (
                   <div key={label} className="flex items-center gap-3 px-4 py-2.5 odd:bg-slate-50">
                     <span className="w-8 text-xs font-bold text-slate-400">{label}</span>
-                    <AccountPicker value={value} onChange={onChange} accounts={accountOptions} placeholder="— Không có —" allowEmpty className="flex-1" />
+                    <AccountPicker value={value} onChange={onChange} accounts={accountOptions} onCreate={createAccount} placeholder="— Không có —" allowEmpty className="flex-1" />
                     <span className="font-mono text-slate-600 text-xs">{fmt(invoice.vat_amount)}</span>
                   </div>
                 ))}

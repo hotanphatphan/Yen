@@ -26,6 +26,7 @@ export function AccountPicker({
   placeholder = 'Chọn tài khoản',
   allowEmpty = false,
   className,
+  onCreate,
 }: {
   value: string
   onChange: (code: string) => void
@@ -33,9 +34,13 @@ export function AccountPicker({
   placeholder?: string
   allowEmpty?: boolean
   className?: string
+  /** Lưu tài khoản con mới (mã + tên) vào danh mục ngay khi thêm. Bỏ trống name = để app tự đặt. */
+  onCreate?: (code: string, name: string) => Promise<void> | void
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [creating, setCreating] = useState<{ code: string; name: string } | null>(null)
+  const [saving, setSaving] = useState(false)
 
   const selected = accounts.find(a => a.code === value)
 
@@ -53,10 +58,28 @@ export function AccountPicker({
     onChange(code)
     setOpen(false)
     setQuery('')
+    setCreating(null)
+  }
+
+  function startCreate() {
+    // Nếu có onCreate → mở form đặt tên; không thì chọn thẳng mã (app tự đặt tên sau)
+    if (onCreate) setCreating({ code: trimmed, name: '' })
+    else pick(trimmed)
+  }
+
+  async function confirmCreate() {
+    if (!creating || saving) return
+    setSaving(true)
+    try {
+      await onCreate?.(creating.code, creating.name.trim())
+      pick(creating.code)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
-    <Popover.Root open={open} onOpenChange={o => { setOpen(o); if (!o) setQuery('') }}>
+    <Popover.Root open={open} onOpenChange={o => { setOpen(o); if (!o) { setQuery(''); setCreating(null) } }}>
       <Popover.Trigger asChild>
         <button
           type="button"
@@ -114,19 +137,41 @@ export function AccountPicker({
 
           {/* Luôn hiện lối "thêm tài khoản con mới" để dễ thấy */}
           <div className="border-t border-slate-100 mt-1 pt-1">
-            {canCreate ? (
+            {creating ? (
+              <div className="px-2 py-1.5 space-y-1.5">
+                <div className="flex items-center gap-2 text-xs text-slate-500">
+                  <Plus className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
+                  Thêm tài khoản mới, mã <span className="font-mono font-medium text-slate-700">{creating.code}</span>
+                </div>
+                <input
+                  autoFocus
+                  value={creating.name}
+                  onChange={e => setCreating(c => c && { ...c, name: e.target.value })}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); confirmCreate() } }}
+                  placeholder="Tên tài khoản (VD Techcombank)"
+                  className="w-full text-sm px-2 py-1.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                />
+                <div className="flex items-center justify-end gap-2">
+                  <button type="button" onClick={() => setCreating(null)} className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1">Hủy</button>
+                  <button type="button" onClick={confirmCreate} disabled={saving}
+                    className="text-xs bg-indigo-600 text-white px-3 py-1 rounded-lg hover:bg-indigo-700 disabled:opacity-50">
+                    {saving ? 'Đang lưu...' : 'Lưu & chọn'}
+                  </button>
+                </div>
+              </div>
+            ) : canCreate ? (
               <button
                 type="button"
-                onClick={() => pick(trimmed)}
+                onClick={startCreate}
                 className="flex w-full items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-indigo-600 font-medium hover:bg-indigo-50"
               >
                 <Plus className="h-4 w-4 shrink-0" />
-                Dùng tài khoản mới: <span className="font-mono">{trimmed}</span>
+                Thêm tài khoản mới: <span className="font-mono">{trimmed}</span>
               </button>
             ) : (
               <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-slate-400">
                 <Plus className="h-3.5 w-3.5 shrink-0" />
-                Thêm tài khoản con: gõ mã số (VD 6421) vào ô tìm ở trên
+                Thêm tài khoản con: gõ mã số (VD 1121) vào ô tìm ở trên
               </div>
             )}
           </div>
