@@ -572,6 +572,16 @@ function StatementsSection({ companyId }: { companyId: string }) {
     return next
   })
 
+  // Chọn tất cả giao dịch trong kỳ đang xem
+  const toggleAllTx = () => setSelectedTxIds(prev => {
+    const ids = periodFiltered.map(t => t.id)
+    const allSelected = ids.length > 0 && ids.every(id => prev.has(id))
+    const next = new Set(prev)
+    if (allSelected) ids.forEach(id => next.delete(id))
+    else ids.forEach(id => next.add(id))
+    return next
+  })
+
   return (
     <div className="space-y-4">
       {/* Month marker */}
@@ -635,14 +645,6 @@ function StatementsSection({ companyId }: { companyId: string }) {
         </label>
         <p className="text-xs text-slate-400">CSV/Excel từ TCB, VCB, BIDV, MB, ACB, VPBank, Agribank</p>
 
-        {selectedTxIds.size > 0 && (
-          <button
-            onClick={() => { if (confirm(`Xóa ${selectedTxIds.size} giao dịch đã chọn?`)) deleteMutation.mutate([...selectedTxIds]) }}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-medium rounded-lg border border-red-200 transition-colors"
-          >
-            <Trash2 className="h-3.5 w-3.5" /> Xóa {selectedTxIds.size} dòng
-          </button>
-        )}
       </div>
 
       {importStatus?.type === 'success' && (
@@ -719,7 +721,7 @@ function StatementsSection({ companyId }: { companyId: string }) {
 
       {/* Summary chips */}
       {periodFiltered.length > 0 && (
-        <div className="flex gap-3 text-sm">
+        <div className="flex gap-3 text-sm items-center">
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700">
             <AlertCircle className="h-3.5 w-3.5" />
             {unmatched.length} chờ xử lý
@@ -728,6 +730,24 @@ function StatementsSection({ companyId }: { companyId: string }) {
             <CheckCircle2 className="h-3.5 w-3.5" />
             {matched.length} đã xử lý
           </div>
+          <label className="flex items-center gap-1.5 cursor-pointer select-none ml-auto">
+            <input
+              type="checkbox"
+              className="rounded"
+              ref={el => { if (el) el.indeterminate = periodFiltered.some(t => selectedTxIds.has(t.id)) && !periodFiltered.every(t => selectedTxIds.has(t.id)) }}
+              checked={periodFiltered.length > 0 && periodFiltered.every(t => selectedTxIds.has(t.id))}
+              onChange={toggleAllTx}
+            />
+            <span className="text-xs text-slate-400">Chọn tất cả</span>
+          </label>
+          {selectedTxIds.size > 0 && (
+            <button
+              onClick={() => { if (confirm(`Xóa ${selectedTxIds.size} giao dịch đã chọn?`)) deleteMutation.mutate([...selectedTxIds]) }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-medium rounded-lg border border-red-200 transition-colors"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Xóa {selectedTxIds.size} dòng
+            </button>
+          )}
         </div>
       )}
 
