@@ -247,13 +247,16 @@ export interface Invoice {
   invoice_date: string | null
   seller_name: string | null
   seller_mst: string | null
+  seller_address: string | null
   buyer_name: string | null
   buyer_mst: string | null
+  buyer_address: string | null
   subtotal: number
   vat_amount: number
   total: number
   vat_rate: string | null
   line_items: unknown[]
+  description: string | null
   file_name: string | null
   source_format: InvoiceSourceFormat | null
   status: InvoiceStatus

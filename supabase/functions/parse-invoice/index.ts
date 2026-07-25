@@ -81,8 +81,10 @@ function parseXml(xmlText: string, companyMst: string) {
 
   const sellerName = getIn(nbanBlock, "Ten");
   const sellerMst = getIn(nbanBlock, "MST");
+  const sellerAddress = getIn(nbanBlock, "DChi") || null;
   const buyerName = getIn(nmuaBlock, "Ten");
   const buyerMst = getIn(nmuaBlock, "MST");
+  const buyerAddress = getIn(nmuaBlock, "DChi") || null;
 
   const invoiceDate = get("NLap") || null;
   const subtotal = Math.round(parseFloat(get("TgTCThue") || "0"));
@@ -114,8 +116,10 @@ function parseXml(xmlText: string, companyMst: string) {
     invoiceDate,
     sellerName,
     sellerMst,
+    sellerAddress,
     buyerName,
     buyerMst,
+    buyerAddress,
     subtotal,
     vatAmount,
     total,
@@ -123,6 +127,18 @@ function parseXml(xmlText: string, companyMst: string) {
     lineItems,
     direction: sellerMst === companyMst ? "outgoing" : "incoming",
   };
+}
+
+// ─── Address extraction (best-effort, dùng chung cho PDF & HTML) ───────────────
+// Lấy các đoạn "Địa chỉ (Address) : ..." theo thứ tự xuất hiện.
+// Trên hóa đơn VN, địa chỉ bên bán đứng trước, bên mua đứng sau.
+function extractAddresses(text: string): [string | null, string | null] {
+  const matches = [
+    ...text.matchAll(
+      /[ĐD][iị]a\s+ch[iỉ]\s*(?:\([^)]*\))?\s*[:\s]+([^\n]{5,160}?)(?=\s{2,}(?:M[aã]\s+s[oố]|MST|Tax|[ĐD]i[eệ]n\s+tho[aạ]i|Tel|S[oố]\s+t[aà]i|Ng[uư][oờ]i|H[iì]nh\s+th[uứ]c)|\n|$)/gi,
+    ),
+  ].map((m) => m[1].trim()).filter((s) => s.length >= 5);
+  return [matches[0] ?? null, matches[1] ?? null];
 }
 
 // ─── PDF text parser (pdfjs plain-text, multiple Vietnamese e-invoice formats) ─
@@ -353,14 +369,18 @@ function parsePdfText(text: string, companyMst: string) {
   const bRaw = buyerLabelMatch?.[1].trim() ?? null;
   if (looksLikeCompanyName(bRaw)) buyerName = bRaw;
 
+  const [sellerAddress, buyerAddress] = extractAddresses(text);
+
   return {
     invoiceNumber,
     invoiceSeries,
     invoiceDate,
     sellerName,
     sellerMst,
+    sellerAddress,
     buyerName,
     buyerMst,
+    buyerAddress,
     subtotal,
     vatAmount,
     total,
@@ -481,14 +501,18 @@ function parseHtml(html: string, companyMst: string) {
     text.match(/GTGT\s+(\d+%)/i);
   const vatRate = vatRateMatch?.[1] ?? "";
 
+  const [sellerAddress, buyerAddress] = extractAddresses(text);
+
   return {
     invoiceNumber,
     invoiceSeries,
     invoiceDate,
     sellerName,
     sellerMst,
+    sellerAddress,
     buyerName,
     buyerMst,
+    buyerAddress,
     subtotal,
     vatAmount,
     total,

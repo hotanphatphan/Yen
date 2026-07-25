@@ -77,7 +77,7 @@ export default function VATTab({ companyId }: { companyId: string }) {
     queryFn: async () => {
       const { data } = await supabase
         .from('invoices')
-        .select('direction, subtotal, vat_amount, invoice_date, seller_name, buyer_name, invoice_number')
+        .select('direction, subtotal, vat_amount, invoice_date, seller_name, seller_mst, seller_address, buyer_name, buyer_mst, buyer_address, invoice_number, description')
         .eq('company_id', companyId)
         .eq('status', 'posted')
         .gte('invoice_date', qStart)
@@ -179,17 +179,20 @@ export default function VATTab({ companyId }: { companyId: string }) {
       ['BẢNG KÊ HÓA ĐƠN, CHỨNG TỪ HÀNG HÓA, DỊCH VỤ BÁN RA'],
       [`Kỳ tính thuế: ${period}   Đơn vị: ${company?.name ?? ''}   MST: ${company?.mst ?? ''}`],
       [],
-      ['STT', 'Tên người mua', 'Ngày HĐ', 'Số HĐ', 'Doanh thu chưa thuế', 'Thuế GTGT'],
-      ...outgoingInvoices.map((inv: { buyer_name: string; invoice_date: string; invoice_number: string; subtotal: number; vat_amount: number }, idx: number) => [
+      ['STT', 'Tên người mua', 'MST', 'Địa chỉ', 'Ngày HĐ', 'Số HĐ', 'Diễn giải', 'Doanh thu chưa thuế', 'Thuế GTGT'],
+      ...outgoingInvoices.map((inv: { buyer_name: string; buyer_mst: string; buyer_address: string; invoice_date: string; invoice_number: string; description: string; subtotal: number; vat_amount: number }, idx: number) => [
         idx + 1,
         inv.buyer_name ?? '',
+        inv.buyer_mst ?? '',
+        inv.buyer_address ?? '',
         inv.invoice_date ?? '',
         inv.invoice_number ?? '',
+        inv.description ?? '',
         inv.subtotal ?? 0,
         inv.vat_amount ?? 0,
       ]),
       [],
-      ['', '', '', 'TỔNG CỘNG', outgoingInvoices.reduce((s: number, i: { subtotal: number }) => s + (i.subtotal ?? 0), 0), invoiceOutputVAT],
+      ['', '', '', '', '', '', 'TỔNG CỘNG', outgoingInvoices.reduce((s: number, i: { subtotal: number }) => s + (i.subtotal ?? 0), 0), invoiceOutputVAT],
     ]
     const ws1 = XLSX.utils.aoa_to_sheet(outRows)
     XLSX.utils.book_append_sheet(wb, ws1, 'HĐ bán ra')
@@ -199,17 +202,20 @@ export default function VATTab({ companyId }: { companyId: string }) {
       ['BẢNG KÊ HÓA ĐƠN, CHỨNG TỪ HÀNG HÓA, DỊCH VỤ MUA VÀO'],
       [`Kỳ tính thuế: ${period}   Đơn vị: ${company?.name ?? ''}   MST: ${company?.mst ?? ''}`],
       [],
-      ['STT', 'Tên người bán', 'Ngày HĐ', 'Số HĐ', 'Giá trị chưa thuế', 'Thuế GTGT được khấu trừ'],
-      ...incomingInvoices.map((inv: { seller_name: string; invoice_date: string; invoice_number: string; subtotal: number; vat_amount: number }, idx: number) => [
+      ['STT', 'Tên người bán', 'MST', 'Địa chỉ', 'Ngày HĐ', 'Số HĐ', 'Diễn giải', 'Giá trị chưa thuế', 'Thuế GTGT được khấu trừ'],
+      ...incomingInvoices.map((inv: { seller_name: string; seller_mst: string; seller_address: string; invoice_date: string; invoice_number: string; description: string; subtotal: number; vat_amount: number }, idx: number) => [
         idx + 1,
         inv.seller_name ?? '',
+        inv.seller_mst ?? '',
+        inv.seller_address ?? '',
         inv.invoice_date ?? '',
         inv.invoice_number ?? '',
+        inv.description ?? '',
         inv.subtotal ?? 0,
         inv.vat_amount ?? 0,
       ]),
       [],
-      ['', '', '', 'TỔNG CỘNG', incomingInvoices.reduce((s: number, i: { subtotal: number }) => s + (i.subtotal ?? 0), 0), invoiceInputVAT],
+      ['', '', '', '', '', '', 'TỔNG CỘNG', incomingInvoices.reduce((s: number, i: { subtotal: number }) => s + (i.subtotal ?? 0), 0), invoiceInputVAT],
     ]
     const ws2 = XLSX.utils.aoa_to_sheet(inRows)
     XLSX.utils.book_append_sheet(wb, ws2, 'HĐ mua vào')

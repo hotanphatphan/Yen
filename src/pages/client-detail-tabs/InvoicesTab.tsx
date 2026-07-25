@@ -8,7 +8,7 @@ if (typeof ReadableStream !== 'undefined' && !(Symbol.asyncIterator in ReadableS
   }
 }
 
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Upload, FileText, X, CheckCircle2, ArrowDownCircle,
@@ -17,9 +17,9 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/shared/Dialog'
 import { Button } from '@/components/shared/Button'
 import { supabase } from '@/lib/supabase'
-import { suggestAccounts, COMMON_ACCOUNTS } from '@/lib/accountSuggestion'
+import { suggestAccounts, COMMON_ACCOUNTS, getAccountName } from '@/lib/accountSuggestion'
 import { cn } from '@/lib/utils'
-import type { Invoice, JournalEntry } from '@/types'
+import type { Invoice, JournalEntry, AccountType } from '@/types'
 // ─── PDF text extraction ──────────────────────────────────────────────────────
 
 async function extractPdfText(buffer: ArrayBuffer): Promise<string> {
@@ -44,8 +44,10 @@ interface ParsedInvoice {
   invoiceDate: string | null
   sellerName: string | null
   sellerMst: string | null
+  sellerAddress: string | null
   buyerName: string | null
   buyerMst: string | null
+  buyerAddress: string | null
   subtotal: number
   vatAmount: number
   total: number
@@ -86,6 +88,15 @@ async function parseInvoiceFile(file: File, companyMst: string): Promise<ParsedI
 
 const fmt = (n: number) => new Intl.NumberFormat('vi-VN').format(n)
 
+// Suy ra năm / tháng / quý từ ngày hóa đơn (dùng cho kho hóa đơn)
+function periodOf(dateStr: string | null): { year: number; month: number; quarter: number } | null {
+  if (!dateStr) return null
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return null
+  const month = d.getMonth() + 1
+  return { year: d.getFullYear(), month, quarter: Math.ceil(month / 3) }
+}
+
 const STATUS_LABEL: Record<Invoice['status'], string> = {
   pending: 'Chờ hạch toán',
   matched: 'Đã khớp',
@@ -112,15 +123,65 @@ function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
   onPosted: () => void
   mode?: 'create' | 'edit'
 }) {
+  const qc = useQueryClient()
   const suggestion = suggestAccounts(invoice)
+  const isIncoming = invoice.direction === 'incoming'
   const [debitAccount, setDebitAccount] = useState(suggestion.debitAccount)
   const [creditAccount, setCreditAccount] = useState(suggestion.creditAccount)
   const [vatDebit, setVatDebit] = useState(suggestion.vatDebitAccount ?? '')
   const [vatCredit, setVatCredit] = useState(suggestion.vatCreditAccount ?? '')
   const [notes, setNotes] = useState('')
+  // Diễn giải: ưu tiên diễn giải đã lưu trên hóa đơn, nếu trống thì tạo mặc định
+  const defaultDescription = invoice.description?.trim() || (isIncoming
+    ? `Mua hàng từ ${invoice.seller_name ?? 'NCC'} - HĐ ${invoice.invoice_series}/${invoice.invoice_number}`
+    : `Bán hàng cho ${invoice.buyer_name ?? 'KH'} - HĐ ${invoice.invoice_series}/${invoice.invoice_number}`)
+  const [description, setDescription] = useState(defaultDescription)
   const [loading, setLoading] = useState(false)
   const [existingEntryId, setExistingEntryId] = useState<string | null>(null)
-  const isIncoming = invoice.direction === 'incoming'
+
+  // Danh mục tài khoản của công ty (đã seed sẵn, có cả tk con) — dùng cho gợi ý combobox
+  const { data: dbAccounts = [] } = useQuery({
+    queryKey: ['accounts', invoice.company_id],
+    queryFn: async () => {
+      const { data, error } = await supabase.from('accounts')
+        .select('code, name, type, parent_code')
+        .eq('company_id', invoice.company_id).order('code')
+      if (error) throw error
+      return data as { code: string; name: string; type: AccountType; parent_code: string | null }[]
+    },
+  })
+
+  const accountOptions = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const a of COMMON_ACCOUNTS) map.set(a.code, a.label)
+    for (const a of dbAccounts) map.set(a.code, `${a.code} — ${a.name}`)
+    return [...map.entries()]
+      .map(([code, label]) => ({ code, label }))
+      .sort((x, y) => x.code.localeCompare(y.code))
+  }, [dbAccounts])
+
+  // Ghi nhớ tài khoản con mới gõ tay → lưu vào danh mục để lần sau tự gợi ý
+  async function rememberAccounts(codes: string[]) {
+    const existing = new Set(dbAccounts.map(a => a.code))
+    const newCodes = [...new Set(codes.filter(Boolean))].filter(c => !existing.has(c))
+    if (newCodes.length === 0) return
+    const rows = newCodes.map(code => {
+      const parentCode = code.length > 3 ? code.slice(0, 3) : null
+      const parent = dbAccounts.find(a => a.code === parentCode)
+      const known = getAccountName(code)
+      return {
+        company_id: invoice.company_id,
+        code,
+        name: known !== code ? known : parent ? `${parent.name} (${code})` : `Tài khoản ${code}`,
+        type: (parent?.type ?? 'expense') as AccountType,
+        parent_code: parent ? parentCode : null,
+      }
+    })
+    try {
+      await supabase.from('accounts').upsert(rows, { onConflict: 'company_id,code', ignoreDuplicates: true })
+      qc.invalidateQueries({ queryKey: ['accounts', invoice.company_id] })
+    } catch { /* ghi nhớ là phụ, lỗi không chặn hạch toán */ }
+  }
 
   // In edit mode, load existing journal entry and prefill
   useEffect(() => {
@@ -139,6 +200,7 @@ function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
           setVatDebit(entry.vat_debit_account ?? '')
           setVatCredit(entry.vat_credit_account ?? '')
           setNotes(entry.notes ?? '')
+          if (entry.description) setDescription(entry.description)
         }
       })
   }, [mode, invoice.id])
@@ -149,9 +211,7 @@ function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
       const entryData = {
         company_id: invoice.company_id,
         date: invoice.invoice_date ?? new Date().toISOString().split('T')[0],
-        description: isIncoming
-          ? `Mua hàng từ ${invoice.seller_name ?? 'NCC'} - HĐ ${invoice.invoice_series}/${invoice.invoice_number}`
-          : `Bán hàng cho ${invoice.buyer_name ?? 'KH'} - HĐ ${invoice.invoice_series}/${invoice.invoice_number}`,
+        description: description.trim() || defaultDescription,
         type: 'invoice',
         debit_account: debitAccount,
         credit_account: creditAccount,
@@ -167,12 +227,18 @@ function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
       if (mode === 'edit' && existingEntryId) {
         const { error } = await supabase.from('journal_entries').update(entryData).eq('id', existingEntryId)
         if (error) throw error
+        // Đồng bộ diễn giải về hóa đơn để lên bảng kê
+        await supabase.from('invoices').update({ description: description.trim() || null }).eq('id', invoice.id)
       } else {
         const { error: e1 } = await supabase.from('journal_entries').insert(entryData)
         if (e1) throw e1
-        const { error: e2 } = await supabase.from('invoices').update({ status: 'posted' }).eq('id', invoice.id)
+        const { error: e2 } = await supabase.from('invoices')
+          .update({ status: 'posted', description: description.trim() || null }).eq('id', invoice.id)
         if (e2) throw e2
       }
+
+      // Ghi nhớ tài khoản con mới (nếu có)
+      await rememberAccounts([debitAccount, creditAccount, vatDebit, vatCredit])
 
       onPosted()
     } finally {
@@ -208,8 +274,14 @@ function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
           </div>
         </div>
 
+        {/* Danh mục tài khoản gợi ý cho các ô combobox — gõ tay được mã tk con */}
+        <datalist id="account-options">
+          {accountOptions.map(a => <option key={a.code} value={a.code}>{a.label}</option>)}
+        </datalist>
+
         <div className="space-y-3">
           <p className="text-sm font-semibold text-slate-600">Bút toán hạch toán</p>
+          <p className="text-xs text-slate-400 -mt-1">Có thể gõ tay mã tài khoản con (VD 6421) — app sẽ tự nhớ cho lần sau.</p>
           <div className="rounded-xl border border-slate-200 divide-y divide-slate-100 text-sm overflow-hidden">
             {[
               { label: 'Nợ', value: debitAccount, onChange: setDebitAccount, amount: invoice.subtotal },
@@ -217,10 +289,9 @@ function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
             ].map(({ label, value, onChange, amount }) => (
               <div key={label} className="flex items-center gap-3 px-4 py-2.5 odd:bg-slate-50">
                 <span className="w-8 text-xs font-bold text-slate-400">{label}</span>
-                <select value={value} onChange={e => onChange(e.target.value)}
-                  className="flex-1 bg-transparent text-slate-700 focus:outline-none text-sm">
-                  {COMMON_ACCOUNTS.map(a => <option key={a.code} value={a.code}>{a.label}</option>)}
-                </select>
+                <input list="account-options" value={value} onChange={e => onChange(e.target.value)}
+                  placeholder="Mã tài khoản"
+                  className="flex-1 bg-transparent text-slate-700 focus:outline-none text-sm" />
                 <span className="font-mono text-slate-600 text-xs">{fmt(amount)}</span>
               </div>
             ))}
@@ -236,17 +307,23 @@ function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
                 ].map(({ label, value, onChange }) => (
                   <div key={label} className="flex items-center gap-3 px-4 py-2.5 odd:bg-slate-50">
                     <span className="w-8 text-xs font-bold text-slate-400">{label}</span>
-                    <select value={value} onChange={e => onChange(e.target.value)}
-                      className="flex-1 bg-transparent text-slate-700 focus:outline-none text-sm">
-                      <option value="">— Không có —</option>
-                      {COMMON_ACCOUNTS.map(a => <option key={a.code} value={a.code}>{a.label}</option>)}
-                    </select>
+                    <input list="account-options" value={value} onChange={e => onChange(e.target.value)}
+                      placeholder="— Không có —"
+                      className="flex-1 bg-transparent text-slate-700 focus:outline-none text-sm" />
                     <span className="font-mono text-slate-600 text-xs">{fmt(invoice.vat_amount)}</span>
                   </div>
                 ))}
               </div>
             </>
           )}
+
+          <div>
+            <label className="text-xs font-semibold text-slate-500">Diễn giải</label>
+            <input value={description} onChange={e => setDescription(e.target.value)}
+              placeholder="Diễn giải bút toán"
+              className="w-full mt-1 text-sm border border-slate-200 rounded-xl px-3 py-2
+                focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>
 
           <textarea value={notes} onChange={e => setNotes(e.target.value)}
             placeholder="Ghi chú (không bắt buộc)" rows={2}
@@ -294,6 +371,11 @@ function InvoiceDetailDialog({ invoice, onClose, onPost, onEdit }: {
   const [editVatRate, setEditVatRate] = useState(invoice.vat_rate ?? '')
   const [editSellerName, setEditSellerName] = useState(invoice.seller_name ?? '')
   const [editBuyerName, setEditBuyerName] = useState(invoice.buyer_name ?? '')
+  const [editSellerMst, setEditSellerMst] = useState(invoice.seller_mst ?? '')
+  const [editBuyerMst, setEditBuyerMst] = useState(invoice.buyer_mst ?? '')
+  const [editSellerAddress, setEditSellerAddress] = useState(invoice.seller_address ?? '')
+  const [editBuyerAddress, setEditBuyerAddress] = useState(invoice.buyer_address ?? '')
+  const [editDescription, setEditDescription] = useState(invoice.description ?? '')
   const [editLineItems, setEditLineItems] = useState<LineItemDraft[]>(() =>
     invoice.line_items.length > 0
       ? (invoice.line_items as { description: string; quantity: number; unitPrice: number; amount: number }[]).map((li, i) => ({
@@ -340,7 +422,12 @@ function InvoiceDetailDialog({ invoice, onClose, onPost, onEdit }: {
         invoice_date: editDate || null,
         vat_rate: editVatRate || null,
         seller_name: editSellerName || null,
+        seller_mst: editSellerMst || null,
+        seller_address: editSellerAddress || null,
         buyer_name: editBuyerName || null,
+        buyer_mst: editBuyerMst || null,
+        buyer_address: editBuyerAddress || null,
+        description: editDescription || null,
         line_items: lineItems,
       }).eq('id', invoice.id)
     },
@@ -389,18 +476,48 @@ function InvoiceDetailDialog({ invoice, onClose, onPost, onEdit }: {
           {/* Parties */}
           <div className="grid grid-cols-2 gap-3">
             {[
-              { label: 'Bên bán', val: editSellerName, set: setEditSellerName, display: invoice.seller_name, mst: invoice.seller_mst },
-              { label: 'Bên mua', val: editBuyerName, set: setEditBuyerName, display: invoice.buyer_name, mst: invoice.buyer_mst },
-            ].map(({ label, val, set, display, mst }) => (
-              <div key={label} className="rounded-lg border border-slate-200 p-3 space-y-1">
+              {
+                label: 'Bên bán', val: editSellerName, set: setEditSellerName, display: invoice.seller_name,
+                mst: editSellerMst, setMst: setEditSellerMst, displayMst: invoice.seller_mst,
+                addr: editSellerAddress, setAddr: setEditSellerAddress, displayAddr: invoice.seller_address,
+              },
+              {
+                label: 'Bên mua', val: editBuyerName, set: setEditBuyerName, display: invoice.buyer_name,
+                mst: editBuyerMst, setMst: setEditBuyerMst, displayMst: invoice.buyer_mst,
+                addr: editBuyerAddress, setAddr: setEditBuyerAddress, displayAddr: invoice.buyer_address,
+              },
+            ].map(({ label, val, set, display, mst, setMst, displayMst, addr, setAddr, displayAddr }) => (
+              <div key={label} className="rounded-lg border border-slate-200 p-3 space-y-1.5">
                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{label}</p>
                 {isEditing
-                  ? <input value={val} onChange={e => set(e.target.value)} className="w-full text-sm font-semibold text-slate-800 border-b border-slate-200 focus:border-indigo-400 focus:outline-none bg-transparent pb-0.5" />
+                  ? <input value={val} onChange={e => set(e.target.value)} placeholder="Tên đơn vị" className="w-full text-sm font-semibold text-slate-800 border-b border-slate-200 focus:border-indigo-400 focus:outline-none bg-transparent pb-0.5" />
                   : <p className="font-semibold text-slate-800">{display ?? '—'}</p>
                 }
-                {mst && <p className="text-xs text-slate-500">MST: {mst}</p>}
+                {isEditing
+                  ? <div className="flex items-baseline gap-1">
+                      <span className="text-xs text-slate-400 shrink-0">MST:</span>
+                      <input value={mst} onChange={e => setMst(e.target.value)} placeholder="Mã số thuế" className="w-full text-xs text-slate-600 border-b border-slate-200 focus:border-indigo-400 focus:outline-none bg-transparent" />
+                    </div>
+                  : displayMst && <p className="text-xs text-slate-500">MST: {displayMst}</p>
+                }
+                {isEditing
+                  ? <div className="flex items-baseline gap-1">
+                      <span className="text-xs text-slate-400 shrink-0">Đ/c:</span>
+                      <input value={addr} onChange={e => setAddr(e.target.value)} placeholder="Địa chỉ" className="w-full text-xs text-slate-600 border-b border-slate-200 focus:border-indigo-400 focus:outline-none bg-transparent" />
+                    </div>
+                  : displayAddr && <p className="text-xs text-slate-500">Đ/c: {displayAddr}</p>
+                }
               </div>
             ))}
+          </div>
+
+          {/* Diễn giải */}
+          <div className="rounded-lg border border-slate-200 p-3 space-y-1.5">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Diễn giải</p>
+            {isEditing
+              ? <input value={editDescription} onChange={e => setEditDescription(e.target.value)} placeholder="Nội dung hàng hóa / dịch vụ (dùng làm diễn giải khi lên bảng kê)" className="w-full text-sm text-slate-800 border-b border-slate-200 focus:border-indigo-400 focus:outline-none bg-transparent pb-0.5" />
+              : <p className="text-sm text-slate-700">{invoice.description || <span className="text-amber-500">Chưa có — bấm "Sửa thông tin" để điền</span>}</p>
+            }
           </div>
 
           {/* Invoice details */}
@@ -593,6 +710,9 @@ export default function InvoicesTab({ companyId, companyMst }: {
 
   const saveMutation = useMutation({
     mutationFn: async (parsed: ParsedInvoice) => {
+      // Diễn giải tự động = tên dòng hàng đầu tiên (nếu parser đọc được)
+      const firstItem = parsed.lineItems[0] as { description?: string } | undefined
+      const autoDescription = firstItem?.description?.trim() || null
       const { error } = await supabase.from('invoices').insert({
         company_id: companyId,
         direction: parsed.direction,
@@ -601,13 +721,16 @@ export default function InvoicesTab({ companyId, companyMst }: {
         invoice_date: parsed.invoiceDate,
         seller_name: parsed.sellerName,
         seller_mst: parsed.sellerMst,
+        seller_address: parsed.sellerAddress,
         buyer_name: parsed.buyerName,
         buyer_mst: parsed.buyerMst,
+        buyer_address: parsed.buyerAddress,
         subtotal: parsed.subtotal,
         vat_amount: parsed.vatAmount,
         total: parsed.total,
         vat_rate: parsed.vatRate,
         line_items: parsed.lineItems,
+        description: autoDescription,
         file_name: parsed.fileName,
         source_format: parsed.ext as 'pdf' | 'xml' | 'html',
       })
@@ -643,6 +766,42 @@ export default function InvoicesTab({ companyId, companyMst }: {
 
   const pending = invoices.filter(i => i.status === 'pending')
   const posted = invoices.filter(i => i.status === 'posted')
+
+  // ── Kho hóa đơn: lọc & nhóm theo quý / tháng ──
+  const [filterYear, setFilterYear] = useState<number | 'all'>('all')
+  const [filterQuarter, setFilterQuarter] = useState<number | 'all'>('all')
+  const [filterMonth, setFilterMonth] = useState<number | 'all'>('all')
+
+  const availableYears = useMemo(() => {
+    const ys = new Set<number>()
+    for (const inv of invoices) {
+      const p = periodOf(inv.invoice_date)
+      if (p) ys.add(p.year)
+    }
+    return [...ys].sort((a, b) => b - a)
+  }, [invoices])
+
+  const filteredInvoices = useMemo(() => invoices.filter(inv => {
+    const p = periodOf(inv.invoice_date)
+    if (filterYear !== 'all' && (!p || p.year !== filterYear)) return false
+    if (filterQuarter !== 'all' && (!p || p.quarter !== filterQuarter)) return false
+    if (filterMonth !== 'all' && (!p || p.month !== filterMonth)) return false
+    return true
+  }), [invoices, filterYear, filterQuarter, filterMonth])
+
+  const groupedInvoices = useMemo(() => {
+    const map = new Map<string, { label: string; items: Invoice[] }>()
+    for (const inv of filteredInvoices) {
+      const p = periodOf(inv.invoice_date)
+      const key = p ? `${p.year}-${String(p.month).padStart(2, '0')}` : '0000-00'
+      const label = p ? `Tháng ${p.month}/${p.year}` : 'Chưa có ngày'
+      if (!map.has(key)) map.set(key, { label, items: [] })
+      map.get(key)!.items.push(inv)
+    }
+    return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([, v]) => v)
+  }, [filteredInvoices])
+
+  const filtering = filterYear !== 'all' || filterQuarter !== 'all' || filterMonth !== 'all'
 
   return (
     <div className="space-y-5">
@@ -713,12 +872,14 @@ export default function InvoicesTab({ companyId, companyMst }: {
             <input
               type="checkbox"
               className="rounded"
-              checked={selectedIds.size > 0 && selectedIds.size === invoices.length}
-              onChange={() => toggleAll(invoices.map(i => i.id))}
+              checked={selectedIds.size > 0 && selectedIds.size === filteredInvoices.length}
+              onChange={() => toggleAll(filteredInvoices.map(i => i.id))}
             />
             <h3 className="text-sm font-semibold text-slate-700">
-              Danh sách hóa đơn
-              <span className="ml-2 text-xs font-normal text-slate-400">({invoices.length})</span>
+              Kho hóa đơn
+              <span className="ml-2 text-xs font-normal text-slate-400">
+                ({filteredInvoices.length}{filtering ? ` / ${invoices.length}` : ''})
+              </span>
             </h3>
             {selectedIds.size > 0 && (
               <button
@@ -735,13 +896,51 @@ export default function InvoicesTab({ companyId, companyMst }: {
           </div>
         </div>
 
+        {/* Thanh lọc theo kỳ (năm / quý / tháng) */}
+        {invoices.length > 0 && (
+          <div className="px-5 py-2.5 border-b border-slate-100 flex flex-wrap items-center gap-2 bg-slate-50/60">
+            <span className="text-xs text-slate-400">Lọc theo kỳ:</span>
+            <select value={filterYear} onChange={e => setFilterYear(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+              className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400">
+              <option value="all">Tất cả năm</option>
+              {availableYears.map(y => <option key={y} value={y}>Năm {y}</option>)}
+            </select>
+            <select value={filterQuarter} onChange={e => setFilterQuarter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+              className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400">
+              <option value="all">Tất cả quý</option>
+              {[1, 2, 3, 4].map(q => <option key={q} value={q}>Quý {q}</option>)}
+            </select>
+            <select value={filterMonth} onChange={e => setFilterMonth(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+              className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400">
+              <option value="all">Tất cả tháng</option>
+              {Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>Tháng {m}</option>)}
+            </select>
+            {filtering && (
+              <button onClick={() => { setFilterYear('all'); setFilterQuarter('all'); setFilterMonth('all') }}
+                className="text-xs text-indigo-500 hover:text-indigo-600 ml-1">Xóa lọc</button>
+            )}
+          </div>
+        )}
+
         {invoices.length === 0 ? (
           <div className="py-16 text-center text-slate-400 text-sm">
             Chưa có hóa đơn — upload file ở trên để bắt đầu
           </div>
+        ) : filteredInvoices.length === 0 ? (
+          <div className="py-16 text-center text-slate-400 text-sm">
+            Không có hóa đơn nào trong kỳ đã chọn
+          </div>
         ) : (
           <div className="divide-y divide-slate-50">
-            {invoices.map(inv => {
+            {groupedInvoices.map(group => (
+              <div key={group.label}>
+                <div className="px-5 py-2 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-500">{group.label}</span>
+                  <span className="text-xs text-slate-400">
+                    {group.items.length} hóa đơn · {fmt(group.items.reduce((s, i) => s + i.total, 0))} đ
+                  </span>
+                </div>
+                {group.items.map(inv => {
               const suggestion = suggestAccounts(inv)
               const expanded = expandedId === inv.id
               return (
@@ -772,6 +971,9 @@ export default function InvoicesTab({ companyId, companyMst }: {
                         >
                           {inv.direction === 'incoming' ? inv.seller_name : inv.buyer_name}
                         </button>
+                        {inv.description && (
+                          <p className="text-xs text-slate-500 truncate" title={inv.description}>{inv.description}</p>
+                        )}
                         {inv.status === 'pending' && (
                           <p className="text-xs text-indigo-400">
                             Gợi ý: Nợ {suggestion.debitAccount} / Có {suggestion.creditAccount}
@@ -855,6 +1057,8 @@ export default function InvoicesTab({ companyId, companyMst }: {
                 </div>
               )
             })}
+              </div>
+            ))}
           </div>
         )}
       </div>
