@@ -111,7 +111,7 @@ export function AccountPicker({
           <input
             autoFocus
             value={query}
-            onChange={e => setQuery(e.target.value)}
+            onChange={e => { setQuery(e.target.value); if (creating) setCreating(null) }}
             placeholder="Tìm theo tên/mã, hoặc gõ mã mới để thêm..."
             className="w-full text-sm px-2 py-1.5 border-b border-slate-100 focus:outline-none"
           />
