@@ -1,8 +1,12 @@
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { Card, CardContent } from '@/components/shared/Card'
 import { useTransactions } from '@/hooks/useTransactions'
 import { useCompany } from '@/hooks/useCompanies'
 import { formatVND, getCurrentQuarter } from '@/lib/utils'
+import { supabase } from '@/lib/supabase'
+import { periodRevenueFromJournal, periodExpenseFromJournal } from '@/lib/accounting'
+import type { JournalEntry } from '@/types'
 
 function getQuarterRange(year: number, quarter: number) {
   const start = new Date(year, (quarter - 1) * 3, 1).toISOString().split('T')[0]
@@ -23,13 +27,26 @@ export default function FinancialSnapshotTab({ companyId }: { companyId: string 
   const { data: currentTx = [] } = useTransactions(companyId, { status: 'official', dateFrom: curStart, dateTo: curEnd })
   const { data: prevTx = [] } = useTransactions(companyId, { status: 'official', dateFrom: prevStart, dateTo: prevEnd })
 
+  // Bút toán (ngân hàng / sổ quỹ / hóa đơn) — trước đây bị bỏ sót khỏi doanh thu/chi phí
+  const { data: journalEntries = [] } = useQuery({
+    queryKey: ['all-journal-entries', companyId],
+    queryFn: async () => {
+      const { data } = await supabase.from('journal_entries').select('*').eq('company_id', companyId)
+      return (data ?? []) as JournalEntry[]
+    },
+  })
+
   const curRevenue = currentTx.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0)
+    + periodRevenueFromJournal(journalEntries, curStart, curEnd)
   const curExpense = currentTx.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
+    + periodExpenseFromJournal(journalEntries, curStart, curEnd)
   const curNet = curRevenue - curExpense
   const curVAT = Math.round(curRevenue * (company?.vat_rate ?? 10) / 100)
 
   const prevRevenue = prevTx.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0)
+    + periodRevenueFromJournal(journalEntries, prevStart, prevEnd)
   const prevExpense = prevTx.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
+    + periodExpenseFromJournal(journalEntries, prevStart, prevEnd)
   const prevNet = prevRevenue - prevExpense
 
   function pct(cur: number, prev: number) {

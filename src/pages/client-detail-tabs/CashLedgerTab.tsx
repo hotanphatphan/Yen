@@ -56,20 +56,29 @@ export default function CashLedgerTab({ companyId }: { companyId: string }) {
     setSubmitting(true)
     const debit = type === 'thu' ? '111' : counterAccount
     const credit = type === 'thu' ? counterAccount : '111'
-    await supabase.from('journal_entries').insert({
-      company_id: companyId,
-      date,
-      description,
-      type: 'cash',
-      debit_account: debit,
-      credit_account: credit,
-      amount,
-      status: 'posted',
-    })
-    qc.invalidateQueries({ queryKey: ['cash-entries', companyId] })
-    setDescription('')
-    setAmount(0)
-    setSubmitting(false)
+    try {
+      // PHẢI kiểm tra lỗi — nếu insert hỏng mà vẫn xóa form thì phiếu thu/chi
+      // coi như "đã lưu" nhưng thực tế mất, không lên sổ quỹ / cân đối.
+      const { error } = await supabase.from('journal_entries').insert({
+        company_id: companyId,
+        date,
+        description,
+        type: 'cash',
+        debit_account: debit,
+        credit_account: credit,
+        amount,
+        status: 'posted',
+      })
+      if (error) throw error
+      qc.invalidateQueries({ queryKey: ['cash-entries', companyId] })
+      qc.invalidateQueries({ queryKey: ['all-journal-entries', companyId] }) // cân đối thử cập nhật ngay
+      setDescription('')
+      setAmount(0)
+    } catch (err) {
+      alert('Lưu phiếu thất bại: ' + (err instanceof Error ? err.message : String(err)))
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (

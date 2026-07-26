@@ -257,6 +257,8 @@ function PostInvoiceDialog({ invoice, onClose, onPosted, mode = 'create' }: {
       await rememberAccounts([debitAccount, creditAccount, vatDebit, vatCredit])
 
       onPosted()
+    } catch (err) {
+      alert('Hạch toán hóa đơn thất bại: ' + (err instanceof Error ? err.message : String(err)))
     } finally {
       setLoading(false)
     }

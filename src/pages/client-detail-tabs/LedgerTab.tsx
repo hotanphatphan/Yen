@@ -454,18 +454,25 @@ export function SectionButToanDieuChinh({ companyId }: { companyId: string }) {
   async function handleAdd() {
     if (!debitAccount || !creditAccount || !amount) return
     setSubmitting(true)
-    await supabase.from('journal_entries').insert({
-      company_id: companyId,
-      date,
-      description: description || null,
-      debit_account: debitAccount,
-      credit_account: creditAccount,
-      amount,
-    })
-    qc.invalidateQueries({ queryKey: ['journal-entries', companyId] })
-    setDescription('')
-    setAmount(0)
-    setSubmitting(false)
+    try {
+      const { error } = await supabase.from('journal_entries').insert({
+        company_id: companyId,
+        date,
+        description: description || null,
+        debit_account: debitAccount,
+        credit_account: creditAccount,
+        amount,
+      })
+      if (error) throw error
+      qc.invalidateQueries({ queryKey: ['journal-entries', companyId] })
+      qc.invalidateQueries({ queryKey: ['all-journal-entries', companyId] })
+      setDescription('')
+      setAmount(0)
+    } catch (err) {
+      alert('Lưu bút toán thất bại: ' + (err instanceof Error ? err.message : String(err)))
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (

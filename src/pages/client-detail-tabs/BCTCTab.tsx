@@ -14,6 +14,7 @@ import { pdf } from '@react-pdf/renderer'
 import BCTCPDF from '@/lib/pdf/BCTCPDF'
 import type { JournalEntry } from '@/types'
 import { DEFAULT_ACCOUNTS } from '@/lib/seeds/defaultAccounts'
+import { periodRevenueFromJournal, periodExpenseFromJournal } from '@/lib/accounting'
 
 function buildPeriodOptions() {
   const { year, quarter } = getCurrentQuarter()
@@ -96,9 +97,15 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
   const accountIdMap: Record<string, string> = {}
   accounts.forEach((a: { code: string; id: string }) => { accountIdMap[a.code] = a.id })
 
-  // B02 figures
-  const totalRevenue = transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0)
-  const totalExpense = transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
+  // B02 figures — cộng cả 2 nguồn: bảng transactions + bút toán journal_entries
+  // (ngân hàng / sổ quỹ / hóa đơn ghi vào journal_entries, trước đây bị bỏ sót).
+  const periodJEs = journalEntries.filter(e => e.date >= dateFrom && e.date <= dateTo)
+  const totalRevenue =
+    transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0) +
+    periodRevenueFromJournal(periodJEs)
+  const totalExpense =
+    transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0) +
+    periodExpenseFromJournal(periodJEs)
   const netProfit = totalRevenue - totalExpense
 
   // B01 figures — tính từ toàn bộ transactions (cumulative balance sheet)

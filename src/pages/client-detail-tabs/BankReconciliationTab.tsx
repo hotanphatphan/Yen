@@ -446,6 +446,11 @@ function StatementsSection({ companyId }: { companyId: string }) {
   async function confirmTx(bt: BankTransaction) {
     const sg = getSuggestion(bt.id)
     if (!sg) return
+    // Phải có đủ tài khoản Nợ và Có, nếu không bút toán sẽ sai/không ghi được
+    if (!sg.debitAccount || !sg.creditAccount) {
+      alert('Chưa chọn đủ tài khoản Nợ và Có. Vui lòng chọn trước khi xác nhận.')
+      return
+    }
     setConfirming(prev => new Set(prev).add(bt.id))
     try {
       // Ghi nhớ tk con mới (nếu kế toán vừa gõ)
@@ -455,7 +460,9 @@ function StatementsSection({ companyId }: { companyId: string }) {
         ? `Doanh thu${sg.customerName ? ` từ ${sg.customerName}` : ''}${sg.outInvoiceNo ? ` - HĐ ${sg.outInvoiceNo}` : ''}`
         : bt.description
 
-      const { data: entry } = await supabase.from('journal_entries').insert({
+      // Tạo bút toán — PHẢI kiểm tra lỗi. Nếu insert hỏng mà vẫn đánh dấu "đã hạch toán"
+      // thì giao dịch trông như đã book nhưng thực tế không có bút toán nào (không lên cân đối).
+      const { data: entry, error: jeErr } = await supabase.from('journal_entries').insert({
         company_id: companyId,
         date: bt.date,
         description: desc,
@@ -469,10 +476,16 @@ function StatementsSection({ companyId }: { companyId: string }) {
         invoice_id: sg.matchedInvoiceId || null,
         status: 'posted',
       }).select().single()
+      if (jeErr || !entry) throw jeErr ?? new Error('Không tạo được bút toán.')
 
-      await supabase.from('bank_transactions')
-        .update({ status: 'matched', journal_entry_id: entry?.id ?? null })
+      const { error: txErr } = await supabase.from('bank_transactions')
+        .update({ status: 'matched', journal_entry_id: entry.id })
         .eq('id', bt.id)
+      if (txErr) {
+        // Cập nhật giao dịch hỏng → xóa bút toán vừa tạo để không để lại bút toán mồ côi
+        await supabase.from('journal_entries').delete().eq('id', entry.id)
+        throw txErr
+      }
 
       // If matched with invoice, mark it
       if (sg.matchedInvoiceId) {
@@ -482,6 +495,9 @@ function StatementsSection({ companyId }: { companyId: string }) {
       qc.invalidateQueries({ queryKey: ['bank-transactions', companyId] })
       qc.invalidateQueries({ queryKey: ['invoices', companyId] })
       qc.invalidateQueries({ queryKey: ['invoices', companyId, 'pending-for-match'] })
+      qc.invalidateQueries({ queryKey: ['all-journal-entries', companyId] }) // để cân đối thử cập nhật ngay
+    } catch (err) {
+      alert('Hạch toán thất bại: ' + (err instanceof Error ? err.message : String(err)))
     } finally {
       setConfirming(prev => { const s = new Set(prev); s.delete(bt.id); return s })
     }
