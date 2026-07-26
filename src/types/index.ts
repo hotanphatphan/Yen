@@ -231,6 +231,7 @@ export interface JournalEntry {
   invoice_id: string | null
   notes: string | null
   status: string | null
+  group_id: string | null
   created_at: string
 }
 
