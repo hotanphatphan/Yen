@@ -138,6 +138,14 @@ export default function ChartOfAccountsTab({ companyId }: { companyId: string })
                   className="w-full h-9 text-sm rounded-lg border border-slate-200 px-2.5 focus:outline-none focus:ring-1 focus:ring-indigo-400 disabled:bg-slate-50 disabled:text-slate-400 font-mono"
                 />
                 {editId && <p className="text-xs text-slate-400 mt-1">Không đổi được mã. Muốn mã khác thì tạo tài khoản mới.</p>}
+                {!editId && form.code.length > 3 && (
+                  <p className="text-xs text-slate-400 mt-1">
+                    ↳ Tài khoản con của <span className="font-mono">{form.code.slice(0, 3)}</span>
+                    {accounts.find(a => a.code === form.code.slice(0, 3))?.name
+                      ? ` — ${accounts.find(a => a.code === form.code.slice(0, 3))!.name}` : ''}.
+                    Số dư tự cộng vào tổng của {form.code.slice(0, 3)}.
+                  </p>
+                )}
               </div>
               <div>
                 <label className="text-xs text-slate-500 mb-1 block">Tên tài khoản</label>

@@ -54,6 +54,14 @@ export function AccountPicker({
   const trimmed = query.trim()
   const canCreate = /^\d{3,6}$/.test(trimmed) && !accounts.some(a => a.code === trimmed)
 
+  // Tài khoản mẹ của một mã con (VD 1121 → 112) để báo cho user biết sẽ gom vào đâu
+  function parentInfo(code: string): { code: string; name: string } | null {
+    if (code.length <= 3) return null
+    const pc = code.slice(0, 3)
+    const p = accounts.find(a => a.code === pc)
+    return { code: pc, name: p?.name ?? '' }
+  }
+
   function pick(code: string) {
     onChange(code)
     setOpen(false)
@@ -143,6 +151,14 @@ export function AccountPicker({
                   <Plus className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
                   Thêm tài khoản mới, mã <span className="font-mono font-medium text-slate-700">{creating.code}</span>
                 </div>
+                {parentInfo(creating.code) && (
+                  <div className="text-xs text-slate-400 leading-snug">
+                    ↳ Là tài khoản con của{' '}
+                    <span className="font-mono text-slate-600">{parentInfo(creating.code)!.code}</span>
+                    {parentInfo(creating.code)!.name && ` — ${parentInfo(creating.code)!.name}`}.{' '}
+                    Số dư sẽ tự cộng vào tổng của {parentInfo(creating.code)!.code}.
+                  </div>
+                )}
                 <input
                   autoFocus
                   value={creating.name}
