@@ -6,6 +6,7 @@ import { formatVND, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { DEFAULT_ACCOUNTS } from '@/lib/seeds/defaultAccounts'
 import type { JournalEntry, Account } from '@/types'
+import { expandVatLines, isVatLine } from '@/lib/accounting'
 import { Input } from '@/components/shared/Input'
 import { VNDInput } from '@/components/shared/VNDInput'
 
@@ -93,7 +94,7 @@ export default function TrialBalanceTab({ companyId }: { companyId: string }) {
     return accountMap.get(code)!
   }
 
-  for (const e of entries) {
+  for (const e of expandVatLines(entries)) {
     if (e.debit_account) {
       const a = ensure(e.debit_account)
       a.totalDebit += e.amount
@@ -206,6 +207,8 @@ export default function TrialBalanceTab({ companyId }: { companyId: string }) {
                   </div>
                   <div className="col-span-1 flex justify-end">
                     <button
+                      hidden={isVatLine(e)}
+                      title={isVatLine(e) ? undefined : 'Sửa bút toán'}
                       onClick={() => startEdit(e)}
                       className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-indigo-500 transition-all"
                     >

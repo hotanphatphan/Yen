@@ -239,16 +239,8 @@ function parsePdfText(text: string, companyMst: string) {
       vatAmount = Math.round(parseFloat(usdVatMatch[1]) * 100);
       subtotal = total - vatAmount;
     }
-    // Seller company name: "Anthropic, PBC  548 Market Street..."
-    // Require street number ≥3 digits to avoid matching "Page 1 of 1" (single digit after text)
-    if (!sellerName) {
-      const billFromMatch = text.match(/([A-Z][A-Za-z\s,\.]{8,50}?)\s+\d{3,}[^\n]+(?:Street|Avenue|Road|Market|Blvd)/i);
-      if (billFromMatch) sellerName = billFromMatch[1].trim();
-    }
-    // USD invoices are always incoming (we are the buyer, foreign seller has no VN MST)
-    direction = "incoming";
-    buyerMst = companyMst;
-    sellerMst = null;
+    // Tên người bán + chiều hóa đơn được gán SAU khi khai báo sellerName/direction (xem khối "USD invoice" bên dưới).
+    // Gán ở đây gây lỗi "Cannot access 'sellerName' before initialization".
   }
 
   // VAT rate from per-line breakdown
@@ -355,6 +347,16 @@ function parsePdfText(text: string, companyMst: string) {
     );
     const p3 = topCompanyMatch?.[1].trim() ?? null;
     if (looksLikeCompanyName(p3)) sellerName = p3;
+  }
+
+  // USD invoice (Anthropic, Stripe…): luôn là hóa đơn mua vào, người bán nước ngoài không có MST VN.
+  if (vatRate === "USD") {
+    // "Anthropic, PBC  548 Market Street..." — số nhà ≥3 chữ số để tránh khớp "Page 1 of 1"
+    const billFromMatch = text.match(/([A-Z][A-Za-z\s,\.]{8,50}?)\s+\d{3,}[^\n]+(?:Street|Avenue|Road|Market|Blvd)/i);
+    if (billFromMatch) sellerName = billFromMatch[1].trim();
+    direction = "incoming";
+    buyerMst = companyMst;
+    sellerMst = null;
   }
 
   // Clean English translation suffix from seller name

@@ -14,7 +14,7 @@ import { pdf } from '@react-pdf/renderer'
 import BCTCPDF from '@/lib/pdf/BCTCPDF'
 import type { JournalEntry } from '@/types'
 import { DEFAULT_ACCOUNTS } from '@/lib/seeds/defaultAccounts'
-import { periodRevenueFromJournal, periodExpenseFromJournal } from '@/lib/accounting'
+import { periodRevenueFromJournal, periodExpenseFromJournal, expandVatLines, localYmd } from '@/lib/accounting'
 
 function buildPeriodOptions() {
   const { year, quarter } = getCurrentQuarter()
@@ -48,10 +48,10 @@ function calcAccountBalance(
     if (t.account_id !== acctId) return sum
     return t.type === 'income' ? sum + t.amount : sum - t.amount
   }, 0)
-  // Từ journal_entries
+  // Từ journal_entries — gồm cả tài khoản con (VD 112 = 1121 + 1122…; 133 = 1331; 333 = 33311 + 3335)
   const jeBalance = journalEntries.reduce((sum, e) => {
-    if (e.debit_account === code) return sum + e.amount
-    if (e.credit_account === code) return sum - e.amount
+    if (e.debit_account?.startsWith(code)) sum += e.amount
+    if (e.credit_account?.startsWith(code)) sum -= e.amount
     return sum
   }, 0)
   return txBalance + jeBalance
@@ -69,22 +69,24 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
   const isQuarter = period.includes('-Q')
   const [periodYear, periodQ] = isQuarter ? period.split('-Q').map(Number) : [parseInt(period), 0]
   const dateFrom = isQuarter
-    ? new Date(periodYear, (periodQ - 1) * 3, 1).toISOString().split('T')[0]
+    ? localYmd(new Date(periodYear, (periodQ - 1) * 3, 1))
     : `${periodYear}-01-01`
   const dateTo = isQuarter
-    ? new Date(periodYear, periodQ * 3, 0).toISOString().split('T')[0]
+    ? localYmd(new Date(periodYear, periodQ * 3, 0))
     : `${periodYear}-12-31`
 
   const { data: transactions = [] } = useTransactions(companyId, { status: 'official', dateFrom, dateTo })
   const { data: allTransactions = [] } = useTransactions(companyId, { status: 'official' })
 
-  const { data: journalEntries = [] } = useQuery({
+  const { data: rawJournalEntries = [] } = useQuery({
     queryKey: ['journal-entries', companyId],
     queryFn: async () => {
       const { data } = await supabase.from('journal_entries').select('*').eq('company_id', companyId)
       return (data ?? []) as JournalEntry[]
     },
   })
+  // Tách vế thuế GTGT thành dòng riêng để TK 1331 / 33311 lên báo cáo và 131/331/112 đủ số
+  const journalEntries = expandVatLines(rawJournalEntries)
 
   const { data: accounts = [] } = useQuery({
     queryKey: ['accounts', companyId],
@@ -130,8 +132,16 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
   const retainedEarnings = Math.abs(bal('421')) + netProfit
   const totalEquity = capital + retainedEarnings
 
-  // Trial Balance — tất cả TK có phát sinh
-  const tbRows = DEFAULT_ACCOUNTS.map(a => {
+  // Trial Balance — tất cả TK có phát sinh (gồm cả tài khoản con công ty tự mở, VD 1121, 6428, 1388)
+  const nameByCode = new Map<string, string>([
+    ...DEFAULT_ACCOUNTS.map(a => [a.code, a.name] as [string, string]),
+    ...accounts.map((a: { code: string; name: string }) => [a.code, a.name] as [string, string]),
+  ])
+  const tbCodes = [...new Set([
+    ...DEFAULT_ACCOUNTS.map(a => a.code),
+    ...journalEntries.flatMap(e => [e.debit_account, e.credit_account]).filter(Boolean),
+  ])].sort()
+  const tbRows = tbCodes.map(code => ({ code, name: nameByCode.get(code) ?? code })).map(a => {
     const txDebit = allTransactions
       .filter(t => t.account_id === accountIdMap[a.code] && t.type === 'expense')
       .reduce((s, t) => s + t.amount, 0)
