@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { FileDown, FileSpreadsheet } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
-import * as XLSX from 'xlsx'
 import { Button } from '@/components/shared/Button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/shared/Card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/shared/Select'
@@ -14,8 +13,9 @@ import { pdf } from '@react-pdf/renderer'
 import BCTCPDF from '@/lib/pdf/BCTCPDF'
 import type { JournalEntry } from '@/types'
 import { DEFAULT_ACCOUNTS } from '@/lib/seeds/defaultAccounts'
-import { periodRevenueFromJournal, periodExpenseFromJournal, expandVatLines, localYmd } from '@/lib/accounting'
+import { expandVatLines, localYmd } from '@/lib/accounting'
 import { downloadExcel, vnDate } from '@/lib/excelExport'
+import { computeB02, computeB03, type ReportLine } from '@/lib/financialStatements'
 
 function buildPeriodOptions() {
   const { year, quarter } = getCurrentQuarter()
@@ -44,8 +44,10 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
   const [generating, setGenerating] = useState(false)
   const [activeView, setActiveView] = useState<'reports' | 'tb' | 'gl'>('reports')
   const [glAccount, setGlAccount] = useState('112')
+  const [cfOpen, setCfOpen] = useState<string | null>(null)
 
   const isQuarter = period.includes('-Q')
+  const periodLabel = period.includes('-Q') ? `Quý ${period.split('-Q')[1]}/${period.split('-Q')[0]}` : `Năm ${period}`
   const [periodYear, periodQ] = isQuarter ? period.split('-Q').map(Number) : [parseInt(period), 0]
   const dateFrom = isQuarter
     ? localYmd(new Date(periodYear, (periodQ - 1) * 3, 1))
@@ -78,16 +80,7 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
   const accountIdMap: Record<string, string> = {}
   accounts.forEach((a: { code: string; id: string }) => { accountIdMap[a.code] = a.id })
 
-  // B02 figures — cộng cả 2 nguồn: bảng transactions + bút toán journal_entries
-  // (ngân hàng / sổ quỹ / hóa đơn ghi vào journal_entries, trước đây bị bỏ sót).
   const periodJEs = journalEntries.filter(e => e.date >= dateFrom && e.date <= dateTo)
-  const totalRevenue =
-    transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0) +
-    periodRevenueFromJournal(periodJEs)
-  const totalExpense =
-    transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0) +
-    periodExpenseFromJournal(periodJEs)
-  const netProfit = totalRevenue - totalExpense
 
   // B01 — số dư TẠI NGÀY CUỐI KỲ (lũy kế từ đầu), tính từ sổ bút toán kép (journal_entries).
   // Tổng tài sản = toàn bộ TK loại 1+2; nợ phải trả = loại 3; vốn = loại 4 + lãi/lỗ lũy kế (loại 5–9 chưa kết chuyển).
@@ -151,6 +144,35 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
     return { ...a, debit, credit, balance: debit - credit }
   }).filter(r => r.debit > 0 || r.credit > 0)
 
+  // B02 / B03 theo TT133 — dùng chung cho màn hình, Excel, PDF
+  const legacyRevenue = transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0)
+  const legacyExpense = transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
+  const b02Lines = computeB02(journalEntries, dateFrom, dateTo, { revenue: legacyRevenue, expense: legacyExpense })
+  const b03 = computeB03(journalEntries, dateFrom, dateTo, code => nameByCode.get(code) ?? '')
+  const b01Lines: ReportLine[] = [
+    { code: 'A', label: 'TÀI SẢN', bold: true },
+    { code: '110', label: 'I. Tiền và các khoản tương đương tiền', value: cash, indent: true },
+    { code: '131', label: 'II. Phải thu của khách hàng', value: receivables, indent: true },
+    { code: '133', label: 'III. Thuế GTGT được khấu trừ', value: vatInput, indent: true },
+    { code: '140', label: 'IV. Hàng tồn kho', value: inventory, indent: true },
+    { code: '150', label: 'V. Tài sản cố định (nguyên giá − hao mòn)', value: ppe - accDepreciation, indent: true },
+    { code: '160', label: 'VI. Chi phí trả trước', value: prepaid, indent: true },
+    { code: '180', label: 'VII. Tài sản khác (138, 141, 128…)', value: otherAssets, indent: true },
+    { code: '200', label: 'TỔNG CỘNG TÀI SẢN', value: totalAssets, bold: true },
+    { code: 'C', label: 'NỢ PHẢI TRẢ', bold: true },
+    { code: '311', label: '1. Vay và nợ thuê tài chính', value: shortTermLoan, indent: true },
+    { code: '331', label: '2. Phải trả người bán', value: payables, indent: true },
+    { code: '333', label: '3. Thuế và các khoản phải nộp Nhà nước', value: taxPayable, indent: true },
+    { code: '334', label: '4. Phải trả người lao động', value: salaryPayable, indent: true },
+    { code: '338', label: '5. Nợ phải trả khác', value: otherLiabilities, indent: true },
+    { code: '300', label: 'Tổng nợ phải trả', value: totalLiabilities, bold: true },
+    { code: 'D', label: 'VỐN CHỦ SỞ HỮU', bold: true },
+    { code: '411', label: '1. Vốn góp của chủ sở hữu', value: capital, indent: true },
+    { code: '421', label: '2. Lợi nhuận sau thuế chưa phân phối', value: retainedEarnings, indent: true },
+    { code: '400', label: 'Tổng vốn chủ sở hữu', value: totalEquity, bold: true },
+    { code: '500', label: 'TỔNG CỘNG NGUỒN VỐN', value: totalLiabilities + totalEquity, bold: true },
+  ]
+
   // General Ledger — sổ cái 1 TK trong kỳ: số dư đầu kỳ + phát sinh + số dư cuối kỳ.
   // Chọn TK mẹ (VD 112) thì gồm cả TK con (1121…); có cả vế thuế GTGT.
   const glOptions = [...new Set(tbRows.flatMap(r => r.code.length > 3 ? [r.code.slice(0, 3), r.code] : [r.code]))]
@@ -195,72 +217,26 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
   }
 
   function exportExcel() {
-    const wb = XLSX.utils.book_new()
-    const fmt = (n: number) => n
-
-    // B01 — Bảng cân đối kế toán
-    const b01 = [
-      ['BẢNG CÂN ĐỐI KẾ TOÁN (B01)'],
-      [`Kỳ: ${period}   Đơn vị: ${company?.name ?? ''}   MST: ${company?.mst ?? ''}`],
-      [],
-      ['Chỉ tiêu', 'Số tiền (đ)'],
-      ['A. TÀI SẢN', ''],
-      ['  I. Tiền và tương đương tiền (TK 111, 112)', fmt(cash)],
-      ['  II. Phải thu khách hàng (TK 131)', fmt(receivables)],
-      ['  III. Thuế VAT được khấu trừ (TK 133)', fmt(vatInput)],
-      ['  IV. Hàng tồn kho (TK 152, 155, 156)', fmt(inventory)],
-      ['  V. Tài sản cố định (TK 211 - 214)', fmt(ppe - accDepreciation)],
-      ['  VI. Chi phí trả trước (TK 242)', fmt(prepaid)],
-      ['  VII. Tài sản khác (138, 141, 128…)', fmt(otherAssets)],
-      ['TỔNG CỘNG TÀI SẢN', fmt(totalAssets)],
-      [],
-      ['B. NGUỒN VỐN', ''],
-      ['  I. Vay ngắn hạn (TK 311)', fmt(shortTermLoan)],
-      ['  II. Phải trả người bán (TK 331)', fmt(payables)],
-      ['  III. Thuế phải nộp (TK 333)', fmt(taxPayable)],
-      ['  IV. Phải trả người lao động (TK 334)', fmt(salaryPayable)],
-      ['  Nợ phải trả khác (338, 341…)', fmt(otherLiabilities)],
-      ['  V. Vốn chủ sở hữu (TK 411)', fmt(capital)],
-      ['  VI. Lợi nhuận chưa phân phối (TK 421 + LNST)', fmt(retainedEarnings)],
-      ['TỔNG CỘNG NGUỒN VỐN', fmt(totalLiabilities + totalEquity)],
-      [],
-      isUnbalanced ? [`⚠️ CHÊNH LỆCH: ${new Intl.NumberFormat('vi-VN').format(balanceGap)} đ`, ''] : ['✅ Cân bằng', ''],
-    ]
-    const ws1 = XLSX.utils.aoa_to_sheet(b01)
-    XLSX.utils.book_append_sheet(wb, ws1, 'B01 CĐKT')
-
-    // B02 — KQHĐKD
-    const b02 = [
-      ['KẾT QUẢ HOẠT ĐỘNG KINH DOANH (B02)'],
-      [`Kỳ: ${period}   Đơn vị: ${company?.name ?? ''}   MST: ${company?.mst ?? ''}`],
-      [],
-      ['Chỉ tiêu', 'Số tiền (đ)'],
-      ['Doanh thu thuần', fmt(totalRevenue)],
-      ['Chi phí', fmt(totalExpense)],
-      ['Lợi nhuận trước thuế', fmt(netProfit)],
-    ]
-    const ws2 = XLSX.utils.aoa_to_sheet(b02)
-    XLSX.utils.book_append_sheet(wb, ws2, 'B02 KQKD')
-
-    // Trial Balance
-    if (tbRows.length > 0) {
-      const tbSheet = [
-        ['BẢNG CÂN ĐỐI TÀI KHOẢN'],
-        [`Kỳ: ${period}`],
-        [],
-        ['Mã TK', 'Tên TK', 'Tổng Nợ', 'Tổng Có', 'Dư Nợ', 'Dư Có'],
-        ...tbRows.map(r => [
-          r.code, r.name,
-          r.debit, r.credit,
-          r.balance > 0 ? r.balance : 0,
-          r.balance < 0 ? Math.abs(r.balance) : 0,
-        ]),
-      ]
-      const wsTb = XLSX.utils.aoa_to_sheet(tbSheet)
-      XLSX.utils.book_append_sheet(wb, wsTb, 'Cân đối TK')
-    }
-
-    XLSX.writeFile(wb, `bctc-${period}-${company?.name ?? companyId}.xlsx`)
+    const head = [`${company?.name ?? ''} — MST ${company?.mst ?? ''}`, `Kỳ: ${periodLabel} (${vnDate(dateFrom)} – ${vnDate(dateTo)}) · Chế độ kế toán TT133/2016/TT-BTC · Đơn vị tính: đồng`]
+    const toRows = (lines: ReportLine[]) => lines.map(l => [l.code, (l.indent ? '    ' : '') + l.label, l.value ?? ''])
+    downloadExcel(`bctc-${period}-${company?.name ?? ''}`, [
+      { name: 'B01-DNN', title: ['BÁO CÁO TÌNH HÌNH TÀI CHÍNH (B01-DNN)', ...head, `Số dư tại ngày ${vnDate(dateTo)}`],
+        header: ['Mã', 'Chỉ tiêu', 'Số cuối kỳ'], rows: toRows(b01Lines), widths: [7, 60, 18] },
+      { name: 'B02-DNN', title: ['BÁO CÁO KẾT QUẢ HOẠT ĐỘNG KINH DOANH (B02-DNN)', ...head],
+        header: ['Mã số', 'Chỉ tiêu', 'Kỳ này'], rows: toRows(b02Lines), widths: [7, 75, 18] },
+      { name: 'B03-DNN', title: ['BÁO CÁO LƯU CHUYỂN TIỀN TỆ (B03-DNN) — Phương pháp trực tiếp', ...head],
+        header: ['Mã số', 'Chỉ tiêu', 'Kỳ này'], rows: toRows(b03.lines), widths: [7, 85, 18] },
+      { name: 'B03 chi tiết', title: ['CHI TIẾT CÁC KHOẢN TIỀN THEO DÒNG B03', ...head],
+        header: ['Mã số', 'Ngày', 'Diễn giải', 'TK đối ứng', 'Số tiền (+ thu / − chi)'],
+        rows: Object.keys(b03.details).sort().flatMap(code => b03.details[code]
+          .sort((x, y) => x.date.localeCompare(y.date))
+          .map(d => [code, vnDate(d.date), d.description, d.contra, d.amount])),
+        widths: [7, 11, 70, 10, 18] },
+      { name: 'Cân đối TK', title: ['BẢNG CÂN ĐỐI TÀI KHOẢN (lũy kế)', ...head],
+        header: ['Mã TK', 'Tên TK', 'Tổng Nợ', 'Tổng Có', 'Dư Nợ', 'Dư Có'],
+        rows: tbRows.map(r => [r.code, r.name, r.debit, r.credit, r.balance > 0 ? r.balance : '', r.balance < 0 ? -r.balance : '']),
+        widths: [9, 45, 17, 17, 17, 17] },
+    ])
   }
 
   async function exportPDF() {
@@ -268,7 +244,7 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
     setGenerating(true)
     try {
       const blob = await pdf(
-        <BCTCPDF company={company} period={period} transactions={transactions} journalEntries={journalEntries} />
+        <BCTCPDF company={company} periodLabel={periodLabel} asOf={vnDate(dateTo)} b01={b01Lines} b02={b02Lines} b03={b03.lines} />
       ).toBlob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -318,9 +294,9 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
             ))}
           </SelectContent>
         </Select>
-        <Button onClick={exportPDF} disabled={generating || transactions.length === 0}>
+        <Button onClick={exportPDF} disabled={generating || (transactions.length === 0 && journalEntries.length === 0)}>
           <FileDown className="h-4 w-4" />
-          {generating ? 'Đang tạo...' : 'Xuất PDF TT99 (B01+B02+B03)'}
+          {generating ? 'Đang tạo...' : 'Xuất PDF TT133 (B01+B02+B03)'}
         </Button>
         <Button variant="outline" onClick={exportExcel} disabled={transactions.length === 0 && journalEntries.length === 0}>
           <FileSpreadsheet className="h-4 w-4" />
@@ -407,21 +383,14 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
 
           {/* B02-DNN */}
           <Card>
-            <CardHeader><CardTitle className="text-sm">B02-DNN — Kết quả hoạt động kinh doanh</CardTitle></CardHeader>
-            <CardContent className="space-y-1.5 text-sm">
-              {[
-                { code: '01', label: 'Doanh thu bán hàng và CCDV', value: totalRevenue },
-                { code: '10', label: 'Doanh thu thuần', value: totalRevenue, bold: true },
-                { code: '25', label: 'Chi phí quản lý doanh nghiệp', value: totalExpense },
-                { code: '30', label: 'Lợi nhuận thuần từ HĐKD', value: netProfit, bold: true },
-                { code: '50', label: 'Tổng lợi nhuận trước thuế', value: netProfit, bold: true },
-                { code: '60', label: 'Lợi nhuận sau thuế', value: netProfit, bold: true, highlight: true },
-              ].map(row => (
-                <div key={row.code} className={`flex justify-between items-center py-1 ${row.highlight ? 'border-t font-bold' : ''}`}>
+            <CardHeader><CardTitle className="text-sm">B02-DNN — Kết quả hoạt động kinh doanh · {periodLabel}</CardTitle></CardHeader>
+            <CardContent className="space-y-0.5 text-sm">
+              {b02Lines.map(row => (
+                <div key={row.code} className={`flex justify-between items-center py-1 ${row.code === '60' ? 'border-t font-bold' : ''}`}>
                   <span className="text-gray-500 w-8 text-xs">{row.code}</span>
                   <span className={`flex-1 ${row.bold ? 'font-semibold' : 'text-gray-600'}`}>{row.label}</span>
-                  <span className={`font-medium ${row.value < 0 ? 'text-red-600' : 'text-gray-900'} ${row.bold ? 'font-bold' : ''}`}>
-                    {fmtVND(row.value)}
+                  <span className={`font-medium ${(row.value ?? 0) < 0 ? 'text-red-600' : 'text-gray-900'} ${row.bold ? 'font-bold' : ''}`}>
+                    {(row.value ?? 0) < 0 ? `(${fmtVND(row.value ?? 0)})` : fmtVND(row.value ?? 0)}
                   </span>
                 </div>
               ))}
@@ -430,23 +399,51 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
 
           {/* B03-DNN */}
           <Card>
-            <CardHeader><CardTitle className="text-sm">B03-DNN — Lưu chuyển tiền tệ</CardTitle></CardHeader>
-            <CardContent className="space-y-1.5 text-sm">
-              {[
-                { code: '01', label: 'Thu từ bán hàng, CCDV', value: totalRevenue },
-                { code: '02', label: 'Chi trả người cung cấp', value: -totalExpense },
-                { code: '20', label: 'Lưu chuyển tiền thuần từ HĐKD', value: netProfit, bold: true },
-                { code: '50', label: 'Lưu chuyển tiền thuần trong kỳ', value: netProfit, bold: true },
-                { code: '70', label: 'Tiền cuối kỳ', value: cash, bold: true, highlight: true },
-              ].map(row => (
-                <div key={row.code} className={`flex justify-between items-center py-1 ${row.highlight ? 'border-t font-bold' : ''}`}>
-                  <span className="text-gray-500 w-8 text-xs">{row.code}</span>
-                  <span className={`flex-1 ${row.bold ? 'font-semibold' : 'text-gray-600'}`}>{row.label}</span>
-                  <span className={`font-medium ${row.value < 0 ? 'text-red-600' : 'text-gray-900'} ${row.bold ? 'font-bold' : ''}`}>
-                    {fmtVND(row.value)}
-                  </span>
-                </div>
-              ))}
+            <CardHeader>
+              <CardTitle className="text-sm flex items-center justify-between gap-2">
+                <span>B03-DNN — Lưu chuyển tiền tệ (phương pháp trực tiếp) · {periodLabel}</span>
+                {Math.abs(b03.diff) < 1
+                  ? <span className="text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded px-2 py-0.5">Khớp số dư tiền cuối kỳ</span>
+                  : <span className="text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded px-2 py-0.5">Lệch {fmtVND(b03.diff)} so với số dư tiền</span>}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-0.5 text-sm">
+              {b03.lines.map(row => {
+                const det = b03.details[row.code] ?? []
+                const open = cfOpen === row.code
+                return (
+                  <div key={row.code}>
+                    <button
+                      type="button"
+                      disabled={det.length === 0}
+                      onClick={() => setCfOpen(open ? null : row.code)}
+                      className={`w-full flex justify-between items-center py-1 text-left ${['50', '70'].includes(row.code) ? 'border-t' : ''} ${det.length ? 'hover:bg-gray-50 cursor-pointer' : 'cursor-default'}`}
+                    >
+                      <span className="text-gray-500 w-8 text-xs">{/^[IVX]+$/.test(row.code) ? '' : row.code}</span>
+                      <span className={`flex-1 ${row.bold ? 'font-semibold' : 'text-gray-600'} ${row.indent ? 'pl-3' : ''}`}>
+                        {row.label}{det.length > 0 && <span className="ml-1 text-[11px] text-indigo-500">({det.length})</span>}
+                      </span>
+                      {row.value !== undefined && (
+                        <span className={`font-medium ${row.value < 0 ? 'text-red-600' : 'text-gray-900'} ${row.bold ? 'font-bold' : ''}`}>
+                          {row.value < 0 ? `(${fmtVND(row.value)})` : fmtVND(row.value)}
+                        </span>
+                      )}
+                    </button>
+                    {open && (
+                      <div className="ml-8 mb-2 rounded border border-gray-100 bg-gray-50 text-xs">
+                        {det.slice().sort((x, y) => x.date.localeCompare(y.date)).map((d, i) => (
+                          <div key={i} className="grid grid-cols-12 gap-2 px-2 py-1 border-b border-gray-100 last:border-0">
+                            <span className="col-span-2 text-gray-400">{vnDate(d.date)}</span>
+                            <span className="col-span-7 truncate" title={d.description}>{d.description}</span>
+                            <span className="col-span-1 font-mono text-gray-500" title={nameByCode.get(d.contra) ?? ''}>{d.contra}</span>
+                            <span className={`col-span-2 text-right ${d.amount < 0 ? 'text-red-600' : ''}`}>{d.amount < 0 ? `(${fmtVND(d.amount)})` : fmtVND(d.amount)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </CardContent>
           </Card>
         </div>
