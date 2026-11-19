@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FileDown, CheckCircle2, Plus, Trash2, ArrowUpRight, ArrowDownRight, FileSpreadsheet } from 'lucide-react'
+import { FileDown, CheckCircle2, Plus, Trash2, ArrowUpRight, ArrowDownRight, FileSpreadsheet, FileCode2 } from 'lucide-react'
+import { Vat01ExportDialog } from '@/components/vat/Vat01ExportDialog'
 import { Button } from '@/components/shared/Button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/shared/Card'
 import { Input } from '@/components/shared/Input'
@@ -63,8 +64,12 @@ export default function VATTab({ companyId }: { companyId: string }) {
 
   // Get period date range
   const [periodYear, periodQ] = period.split('-Q').map(Number)
-  const qStart = new Date(periodYear, (periodQ - 1) * 3, 1).toISOString().split('T')[0]
-  const qEnd = new Date(periodYear, periodQ * 3, 0).toISOString().split('T')[0]
+  // Định dạng theo giờ địa phương: toISOString() đổi sang UTC làm lùi 1 ngày ở VN (UTC+7),
+  // khiến kỳ Q3 thành 30/06–29/09 → sót hóa đơn ngày 30/09 và lấy nhầm hóa đơn 30/06.
+  const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const qStart = ymd(new Date(periodYear, (periodQ - 1) * 3, 1))
+  const qEnd = ymd(new Date(periodYear, periodQ * 3, 0))
+  const [showXml, setShowXml] = useState(false)
 
   const { data: transactions = [] } = useTransactions(companyId, {
     status: 'official',
@@ -77,12 +82,26 @@ export default function VATTab({ companyId }: { companyId: string }) {
     queryFn: async () => {
       const { data } = await supabase
         .from('invoices')
-        .select('direction, subtotal, vat_amount, invoice_date, seller_name, seller_mst, seller_address, buyer_name, buyer_mst, buyer_address, invoice_number, description')
+        .select('direction, subtotal, vat_amount, vat_rate, line_items, invoice_date, seller_name, seller_mst, seller_address, buyer_name, buyer_mst, buyer_address, invoice_number, description')
         .eq('company_id', companyId)
         .eq('status', 'posted')
         .gte('invoice_date', qStart)
         .lte('invoice_date', qEnd)
       return data ?? []
+    },
+  })
+
+  const { data: unpostedCount = 0 } = useQuery({
+    queryKey: ['invoices-unposted', companyId, qStart, qEnd],
+    queryFn: async () => {
+      const { count } = await supabase
+        .from('invoices')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .neq('status', 'posted')
+        .gte('invoice_date', qStart)
+        .lte('invoice_date', qEnd)
+      return count ?? 0
     },
   })
 
@@ -243,6 +262,16 @@ export default function VATTab({ companyId }: { companyId: string }) {
 
   return (
     <div className="space-y-5">
+      {showXml && company && (
+        <Vat01ExportDialog
+          company={company}
+          year={periodYear}
+          quarter={periodQ}
+          invoices={postedInvoices}
+          unpostedCount={unpostedCount}
+          onClose={() => setShowXml(false)}
+        />
+      )}
       {/* Header row */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2">
@@ -268,6 +297,9 @@ export default function VATTab({ companyId }: { companyId: string }) {
           </Button>
           <Button size="sm" variant="outline" onClick={exportExcel}>
             <FileSpreadsheet className="h-3.5 w-3.5" /> Excel
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setShowXml(true)} disabled={!company}>
+            <FileCode2 className="h-3.5 w-3.5" /> XML 01/GTGT
           </Button>
           <Button
             size="sm"

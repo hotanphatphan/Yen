@@ -20,6 +20,7 @@ import { AccountPicker } from '@/components/shared/AccountPicker'
 import { supabase } from '@/lib/supabase'
 import { suggestAccounts, COMMON_ACCOUNTS, getAccountName } from '@/lib/accountSuggestion'
 import { cn } from '@/lib/utils'
+import { findDuplicateGroups, invoiceKey, normalizeNumber } from '@/lib/invoiceDedupe'
 import type { Invoice, JournalEntry, AccountType } from '@/types'
 // ─── PDF text extraction ──────────────────────────────────────────────────────
 
@@ -112,9 +113,12 @@ const STATUS_CLASS: Record<Invoice['status'], string> = {
 interface UploadItem {
   id: string
   file: File
-  state: 'pending' | 'parsing' | 'done' | 'error'
+  state: 'pending' | 'parsing' | 'done' | 'error' | 'duplicate' | 'upgraded'
   error?: string
+  note?: string
 }
+
+type SaveResult = { kind: 'inserted' } | { kind: 'upgraded'; label: string } | { kind: 'duplicate'; label: string }
 
 // ─── Post dialog ──────────────────────────────────────────────────────────────
 
@@ -722,10 +726,42 @@ export default function InvoicesTab({ companyId, companyMst }: {
   })
 
   const saveMutation = useMutation({
-    mutationFn: async (parsed: ParsedInvoice) => {
+    mutationFn: async (parsed: ParsedInvoice): Promise<SaveResult> => {
       // Diễn giải tự động = tên dòng hàng đầu tiên (nếu parser đọc được)
       const firstItem = parsed.lineItems[0] as { description?: string } | undefined
       const autoDescription = firstItem?.description?.trim() || null
+
+      // ── Chống trùng: cùng MST người bán + ký hiệu + số HĐ ──
+      const newKey = invoiceKey({
+        seller_mst: parsed.sellerMst, invoice_series: parsed.invoiceSeries,
+        invoice_number: parsed.invoiceNumber, invoice_date: parsed.invoiceDate,
+      })
+      if (newKey) {
+        const { data: candidates, error: qErr } = await supabase.from('invoices')
+          .select('id, seller_mst, invoice_series, invoice_number, invoice_date, status, source_format, created_at')
+          .eq('company_id', companyId)
+          .like('invoice_number', `%${normalizeNumber(parsed.invoiceNumber)}`)
+        if (qErr) throw qErr
+        const existing = (candidates ?? []).find(c => invoiceKey(c) === newKey)
+        if (existing) {
+          const label = `${existing.invoice_series ?? ''}/${existing.invoice_number ?? ''}`
+          // Bản XML có số liệu chính xác hơn PDF/HTML: cập nhật bản cũ nếu chưa hạch toán.
+          if (parsed.ext === 'xml' && existing.source_format !== 'xml' && existing.status === 'pending') {
+            const { error: uErr } = await supabase.from('invoices').update({
+              invoice_date: parsed.invoiceDate,
+              seller_name: parsed.sellerName, seller_address: parsed.sellerAddress,
+              buyer_name: parsed.buyerName, buyer_mst: parsed.buyerMst, buyer_address: parsed.buyerAddress,
+              subtotal: parsed.subtotal, vat_amount: parsed.vatAmount, total: parsed.total,
+              vat_rate: parsed.vatRate, line_items: parsed.lineItems,
+              file_name: parsed.fileName, source_format: 'xml',
+            }).eq('id', existing.id)
+            if (uErr) throw uErr
+            return { kind: 'upgraded', label }
+          }
+          return { kind: 'duplicate', label }
+        }
+      }
+
       const { error } = await supabase.from('invoices').insert({
         company_id: companyId,
         direction: parsed.direction,
@@ -748,6 +784,7 @@ export default function InvoicesTab({ companyId, companyMst }: {
         source_format: parsed.ext as 'pdf' | 'xml' | 'html',
       })
       if (error) throw error
+      return { kind: 'inserted' }
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['invoices', companyId] }),
   })
@@ -759,8 +796,12 @@ export default function InvoicesTab({ companyId, companyMst }: {
       setUploads(prev => prev.map(u => u.id === item.id ? { ...u, state: 'parsing' } : u))
       try {
         const result = await parseInvoiceFile(item.file, companyMst)
-        await saveMutation.mutateAsync(result)
-        setUploads(prev => prev.map(u => u.id === item.id ? { ...u, state: 'done' } : u))
+        const saved = await saveMutation.mutateAsync(result)
+        const next: Partial<UploadItem> =
+          saved.kind === 'duplicate' ? { state: 'duplicate', note: `Trùng HĐ ${saved.label} đã có — bỏ qua` }
+          : saved.kind === 'upgraded' ? { state: 'upgraded', note: `Đã cập nhật HĐ ${saved.label} bằng số liệu XML` }
+          : { state: 'done' }
+        setUploads(prev => prev.map(u => u.id === item.id ? { ...u, ...next } : u))
       } catch (err) {
         setUploads(prev => prev.map(u =>
           u.id === item.id ? { ...u, state: 'error', error: (err as Error).message } : u
@@ -779,6 +820,8 @@ export default function InvoicesTab({ companyId, companyMst }: {
 
   const pending = invoices.filter(i => i.status === 'pending')
   const posted = invoices.filter(i => i.status === 'posted')
+  const duplicateGroups = useMemo(() => findDuplicateGroups(invoices), [invoices])
+  const duplicateExtraIds = useMemo(() => duplicateGroups.flatMap(g => g.extras.map(e => e.id)), [duplicateGroups])
 
   // ── Kho hóa đơn: lọc & nhóm theo quý / tháng ──
   const [filterYear, setFilterYear] = useState<number | 'all'>('all')
@@ -866,6 +909,8 @@ export default function InvoicesTab({ companyId, companyMst }: {
               <span className="text-sm text-slate-700 flex-1 truncate">{item.file.name}</span>
               {item.state === 'parsing' && <span className="text-xs text-indigo-500 animate-pulse">Đang phân tích...</span>}
               {item.state === 'done' && <CheckCircle2 className="h-4 w-4 text-green-500" />}
+              {item.state === 'duplicate' && <span className="text-xs text-amber-600">{item.note}</span>}
+              {item.state === 'upgraded' && <span className="text-xs text-blue-600">{item.note}</span>}
               {item.state === 'error' && (
                 <span className="text-xs text-red-500 truncate max-w-xs" title={item.error}>
                   <AlertCircle className="h-3.5 w-3.5 inline mr-1" />{item.error}
@@ -875,6 +920,26 @@ export default function InvoicesTab({ companyId, companyMst }: {
                 className="text-slate-300 hover:text-slate-500"><X className="h-3.5 w-3.5" /></button>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Cảnh báo hóa đơn trùng đang có trong kho */}
+      {duplicateGroups.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3">
+          <AlertCircle className="h-4 w-4 text-amber-600 shrink-0" />
+          <p className="text-sm text-amber-800 flex-1">
+            Có <b>{duplicateGroups.length}</b> hóa đơn bị tải lên nhiều lần ({duplicateExtraIds.length} bản thừa).
+            Bản trùng làm sai số thuế GTGT và báo cáo.
+          </p>
+          <button
+            onClick={() => setSelectedIds(new Set(duplicateExtraIds))}
+            className="px-3 py-1.5 bg-white hover:bg-amber-100 text-amber-700 text-xs font-medium rounded-lg border border-amber-300 transition-colors"
+          >
+            Chọn {duplicateExtraIds.length} bản thừa
+          </button>
+          <span className="w-full text-xs text-amber-700">
+            Giữ lại bản đã hạch toán, hoặc bản XML. Sau khi chọn, bấm "Xóa" ở đầu danh sách.
+          </span>
         </div>
       )}
 

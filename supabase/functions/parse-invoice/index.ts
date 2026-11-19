@@ -87,9 +87,12 @@ function parseXml(xmlText: string, companyMst: string) {
   const buyerAddress = getIn(nmuaBlock, "DChi") || null;
 
   const invoiceDate = get("NLap") || null;
-  const subtotal = Math.round(parseFloat(get("TgTCThue") || "0"));
-  const vatAmount = Math.round(parseFloat(get("TgTThue") || "0"));
-  const total = Math.round(parseFloat(get("TgTTTBSo") || "0"));
+  // Hóa đơn ngoại tệ (VD USD): số tiền trong XML là nguyên tệ → quy đổi VND theo tỷ giá <TGia> trên hóa đơn.
+  const currency = (get("DVTTe") || "VND").toUpperCase();
+  const fx = currency !== "VND" ? parseFloat(get("TGia") || "1") || 1 : 1;
+  const subtotal = Math.round(parseFloat(get("TgTCThue") || "0") * fx);
+  const vatAmount = Math.round(parseFloat(get("TgTThue") || "0") * fx);
+  const total = Math.round(parseFloat(get("TgTTTBSo") || "0") * fx);
 
   const lineItems: object[] = [];
   const itemRegex = /<HHDVu>([\s\S]*?)<\/HHDVu>/gi;
@@ -100,8 +103,8 @@ function parseXml(xmlText: string, companyMst: string) {
       description: getIn(b, "THHDVu"),
       unit: getIn(b, "DVTinh"),
       quantity: parseFloat(getIn(b, "SLuong") || "1"),
-      unitPrice: parseFloat(getIn(b, "DGia") || "0"),
-      amount: parseFloat(getIn(b, "ThTien") || "0"),
+      unitPrice: parseFloat(getIn(b, "DGia") || "0") * fx,
+      amount: parseFloat(getIn(b, "ThTien") || "0") * fx,
       vatRate: getIn(b, "TSuat"),
     });
   }
