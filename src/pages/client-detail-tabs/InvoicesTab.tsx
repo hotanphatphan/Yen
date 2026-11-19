@@ -12,7 +12,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Upload, FileText, X, CheckCircle2, ArrowDownCircle,
-  ArrowUpCircle, AlertCircle, BookOpen, ChevronDown, ChevronUp, Trash2, Eye, Pencil, Plus,
+  ArrowUpCircle, AlertCircle, BookOpen, ChevronDown, ChevronUp, Trash2, Eye, Pencil, Plus, FileSpreadsheet,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/shared/Dialog'
 import { Button } from '@/components/shared/Button'
@@ -22,6 +22,7 @@ import { suggestAccounts, COMMON_ACCOUNTS, getAccountName } from '@/lib/accountS
 import { cn } from '@/lib/utils'
 import { findDuplicateGroups, invoiceKey, normalizeNumber } from '@/lib/invoiceDedupe'
 import { buildAccountHistory, pickAccounts, bulkDescription } from '@/lib/bulkPosting'
+import { downloadExcel, vnDate } from '@/lib/excelExport'
 import type { Invoice, JournalEntry, AccountType } from '@/types'
 // ─── PDF text extraction ──────────────────────────────────────────────────────
 
@@ -1046,7 +1047,25 @@ export default function InvoicesTab({ companyId, companyMst }: {
               </button>
             )}
           </div>
-          <div className="flex gap-3 text-xs text-slate-500">
+          <div className="flex items-center gap-3 text-xs text-slate-500">
+            <button
+              disabled={filteredInvoices.length === 0}
+              onClick={() => downloadExcel('kho-hoa-don', [{
+                name: 'Hóa đơn',
+                title: [`KHO HÓA ĐƠN — ${filteredInvoices.length} hóa đơn${filtering ? ' (theo kỳ đang lọc)' : ''}`],
+                header: ['Ngày HĐ', 'Chiều', 'Ký hiệu', 'Số HĐ', 'Người bán', 'MST bán', 'Người mua', 'MST mua', 'Diễn giải',
+                  'Thuế suất', 'Tiền chưa thuế', 'Thuế GTGT', 'Tổng thanh toán', 'Trạng thái', 'Nguồn', 'File'],
+                rows: [...filteredInvoices].sort((a, b) => (a.invoice_date ?? '').localeCompare(b.invoice_date ?? '')).map(i => [
+                  vnDate(i.invoice_date), i.direction === 'incoming' ? 'Mua vào' : 'Bán ra', i.invoice_series, i.invoice_number,
+                  i.seller_name, i.seller_mst, i.buyer_name, i.buyer_mst, i.description, i.vat_rate,
+                  i.subtotal, i.vat_amount, i.total, STATUS_LABEL[i.status] ?? i.status, i.source_format, i.file_name,
+                ]),
+                widths: [11, 9, 10, 11, 40, 15, 30, 15, 40, 9, 15, 13, 15, 14, 7, 30],
+              }])}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5" /> Xuất Excel
+            </button>
             <span className="flex items-center gap-1"><ArrowDownCircle className="h-3.5 w-3.5 text-orange-400" /> Mua vào</span>
             <span className="flex items-center gap-1"><ArrowUpCircle className="h-3.5 w-3.5 text-green-500" /> Bán ra</span>
           </div>

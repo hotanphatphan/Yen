@@ -15,6 +15,7 @@ import BCTCPDF from '@/lib/pdf/BCTCPDF'
 import type { JournalEntry } from '@/types'
 import { DEFAULT_ACCOUNTS } from '@/lib/seeds/defaultAccounts'
 import { periodRevenueFromJournal, periodExpenseFromJournal, expandVatLines, localYmd } from '@/lib/accounting'
+import { downloadExcel, vnDate } from '@/lib/excelExport'
 
 function buildPeriodOptions() {
   const { year, quarter } = getCurrentQuarter()
@@ -33,28 +34,6 @@ function buildPeriodOptions() {
 function fmtVND(n: number) {
   if (n === 0) return '—'
   return new Intl.NumberFormat('vi-VN').format(Math.abs(n))
-}
-
-// Helper: tính balance của 1 mã TK từ transactions + journal_entries
-function calcAccountBalance(
-  code: string,
-  transactions: { account_id: string | null; type: string; amount: number; accounts?: { code: string } | null }[],
-  journalEntries: JournalEntry[],
-  accountIdMap: Record<string, string> // code → id
-) {
-  const acctId = accountIdMap[code]
-  // Từ transactions: income credit TK, expense debit TK
-  const txBalance = transactions.reduce((sum, t) => {
-    if (t.account_id !== acctId) return sum
-    return t.type === 'income' ? sum + t.amount : sum - t.amount
-  }, 0)
-  // Từ journal_entries — gồm cả tài khoản con (VD 112 = 1121 + 1122…; 133 = 1331; 333 = 33311 + 3335)
-  const jeBalance = journalEntries.reduce((sum, e) => {
-    if (e.debit_account?.startsWith(code)) sum += e.amount
-    if (e.credit_account?.startsWith(code)) sum -= e.amount
-    return sum
-  }, 0)
-  return txBalance + jeBalance
 }
 
 export default function BCTCTab({ companyId }: { companyId: string }) {
@@ -110,30 +89,43 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
     periodExpenseFromJournal(periodJEs)
   const netProfit = totalRevenue - totalExpense
 
-  // B01 figures — tính từ toàn bộ transactions (cumulative balance sheet)
-  const bal = (code: string) => calcAccountBalance(code, allTransactions, journalEntries, accountIdMap)
+  // B01 — số dư TẠI NGÀY CUỐI KỲ (lũy kế từ đầu), tính từ sổ bút toán kép (journal_entries).
+  // Tổng tài sản = toàn bộ TK loại 1+2; nợ phải trả = loại 3; vốn = loại 4 + lãi/lỗ lũy kế (loại 5–9 chưa kết chuyển).
+  // Vì sổ kép luôn cân nên B01 luôn cân; TK không có dòng riêng (138, 141, 338…) gom vào dòng "khác" thay vì bị bỏ sót.
+  const balMap = new Map<string, number>()
+  for (const e of journalEntries) {
+    if (e.date > dateTo) continue
+    if (e.debit_account) balMap.set(e.debit_account, (balMap.get(e.debit_account) ?? 0) + e.amount)
+    if (e.credit_account) balMap.set(e.credit_account, (balMap.get(e.credit_account) ?? 0) - e.amount)
+  }
+  const sumPrefix = (...prefixes: string[]) =>
+    [...balMap].reduce((s, [code, v]) => prefixes.some(p => code.startsWith(p)) ? s + v : s, 0)
 
-  const cash = bal('111') + bal('112')
-  const receivables = bal('131')
-  const vatInput = bal('133')
-  const inventory = bal('152') + bal('155') + bal('156')
-  const ppe = bal('211')
-  const accDepreciation = bal('214')
-  const prepaid = bal('242')
-  const totalAssets = cash + receivables + vatInput + inventory + ppe - accDepreciation + prepaid
+  const cash = sumPrefix('111', '112', '113')
+  const receivables = sumPrefix('131')
+  const vatInput = sumPrefix('133')
+  const inventory = sumPrefix('151', '152', '153', '154', '155', '156')
+  const ppe = sumPrefix('211')
+  const accDepreciation = -sumPrefix('214') // số dư Có → dương
+  const prepaid = sumPrefix('242')
+  const totalAssets = sumPrefix('1', '2')
+  const otherAssets = totalAssets - (cash + receivables + vatInput + inventory + ppe - accDepreciation + prepaid)
 
-  const shortTermLoan = Math.abs(bal('311'))
-  const payables = Math.abs(bal('331'))
-  const taxPayable = Math.abs(bal('333'))
-  const salaryPayable = Math.abs(bal('334'))
-  const totalLiabilities = shortTermLoan + payables + taxPayable + salaryPayable
+  const shortTermLoan = -sumPrefix('311')
+  const payables = -sumPrefix('331')
+  const taxPayable = -sumPrefix('333')
+  const salaryPayable = -sumPrefix('334')
+  const totalLiabilities = -sumPrefix('3')
+  const otherLiabilities = totalLiabilities - (shortTermLoan + payables + taxPayable + salaryPayable)
 
-  const capital = Math.abs(bal('411'))
-  const retainedEarnings = Math.abs(bal('421')) + netProfit
-  const totalEquity = capital + retainedEarnings
+  const capital = -sumPrefix('411')
+  const cumulativeProfit = -sumPrefix('5', '6', '7', '8', '9')
+  const retainedEarnings = -sumPrefix('42') + cumulativeProfit
+  const totalEquity = -sumPrefix('4') + cumulativeProfit
 
   // Trial Balance — tất cả TK có phát sinh (gồm cả tài khoản con công ty tự mở, VD 1121, 6428, 1388)
   const nameByCode = new Map<string, string>([
+    ['138', 'Phải thu khác'], ['335', 'Chi phí phải trả'], ['338', 'Phải trả, phải nộp khác'], ['3335', 'Thuế thu nhập cá nhân'],
     ...DEFAULT_ACCOUNTS.map(a => [a.code, a.name] as [string, string]),
     ...accounts.map((a: { code: string; name: string }) => [a.code, a.name] as [string, string]),
   ])
@@ -159,29 +151,48 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
     return { ...a, debit, credit, balance: debit - credit }
   }).filter(r => r.debit > 0 || r.credit > 0)
 
-  // General Ledger — transactions + journal entries cho 1 TK
-  const glTxs = allTransactions
-    .filter(t => t.account_id === accountIdMap[glAccount])
-    .map(t => ({
-      date: t.date,
-      description: t.description || t.counterparty || '—',
-      debit: t.type === 'expense' ? t.amount : 0,
-      credit: t.type === 'income' ? t.amount : 0,
-    }))
-  const glJEs = journalEntries
-    .filter(e => e.debit_account === glAccount || e.credit_account === glAccount)
+  // General Ledger — sổ cái 1 TK trong kỳ: số dư đầu kỳ + phát sinh + số dư cuối kỳ.
+  // Chọn TK mẹ (VD 112) thì gồm cả TK con (1121…); có cả vế thuế GTGT.
+  const glOptions = [...new Set(tbRows.flatMap(r => r.code.length > 3 ? [r.code.slice(0, 3), r.code] : [r.code]))]
+    .sort()
+    .map(code => ({ code, name: nameByCode.get(code) ?? code }))
+  const inGl = (code: string | null) => !!code && code.startsWith(glAccount)
+  const glAll = journalEntries
+    .filter(e => inGl(e.debit_account) !== inGl(e.credit_account)) // bút toán nội bộ trong cùng TK (VD 1121↔1122) không tính
     .map(e => ({
       date: e.date,
       description: e.description || '—',
-      debit: e.debit_account === glAccount ? e.amount : 0,
-      credit: e.credit_account === glAccount ? e.amount : 0,
+      contra: inGl(e.debit_account) ? e.credit_account : e.debit_account,
+      debit: inGl(e.debit_account) ? e.amount : 0,
+      credit: inGl(e.credit_account) ? e.amount : 0,
     }))
-  const glRows = [...glTxs, ...glJEs].sort((a, b) => a.date.localeCompare(b.date))
-  let runningBalance = 0
-  const glRowsWithBalance = glRows.map(r => {
-    runningBalance += r.debit - r.credit
-    return { ...r, balance: runningBalance }
-  })
+    .sort((a, b) => a.date.localeCompare(b.date))
+  const glOpening = glAll.filter(r => r.date < dateFrom).reduce((s, r) => s + r.debit - r.credit, 0)
+  const glRowsWithBalance = glAll
+    .filter(r => r.date >= dateFrom && r.date <= dateTo)
+    .reduce<(typeof glAll[number] & { balance: number })[]>((acc, r) => {
+      const prev = acc.length ? acc[acc.length - 1].balance : glOpening
+      acc.push({ ...r, balance: prev + r.debit - r.credit })
+      return acc
+    }, [])
+  const runningBalance = glRowsWithBalance.length ? glRowsWithBalance[glRowsWithBalance.length - 1].balance : glOpening
+  const glPeriodDebit = glRowsWithBalance.reduce((s, r) => s + r.debit, 0)
+  const glPeriodCredit = glRowsWithBalance.reduce((s, r) => s + r.credit, 0)
+
+  function exportGlExcel() {
+    const name = nameByCode.get(glAccount) ?? glAccount
+    downloadExcel(`so-cai-${glAccount}-${period}`, [{
+      name: `Sổ cái ${glAccount}`,
+      title: [`SỔ CÁI TÀI KHOẢN ${glAccount} — ${name}`, `${company?.name ?? ''} · Kỳ ${period} (${vnDate(dateFrom)} – ${vnDate(dateTo)})`],
+      header: ['Ngày', 'Diễn giải', 'TK đối ứng', 'Nợ', 'Có', 'Số dư Nợ', 'Số dư Có'],
+      rows: [
+        ['', 'Số dư đầu kỳ', '', '', '', glOpening > 0 ? glOpening : '', glOpening < 0 ? -glOpening : ''],
+        ...glRowsWithBalance.map(r => [vnDate(r.date), r.description, r.contra, r.debit || '', r.credit || '', r.balance > 0 ? r.balance : '', r.balance < 0 ? -r.balance : '']),
+        ['', 'Cộng phát sinh / Số dư cuối kỳ', '', glPeriodDebit, glPeriodCredit, runningBalance > 0 ? runningBalance : '', runningBalance < 0 ? -runningBalance : ''],
+      ],
+      widths: [11, 60, 10, 15, 15, 15, 15],
+    }])
+  }
 
   function exportExcel() {
     const wb = XLSX.utils.book_new()
@@ -200,6 +211,7 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
       ['  IV. Hàng tồn kho (TK 152, 155, 156)', fmt(inventory)],
       ['  V. Tài sản cố định (TK 211 - 214)', fmt(ppe - accDepreciation)],
       ['  VI. Chi phí trả trước (TK 242)', fmt(prepaid)],
+      ['  VII. Tài sản khác (138, 141, 128…)', fmt(otherAssets)],
       ['TỔNG CỘNG TÀI SẢN', fmt(totalAssets)],
       [],
       ['B. NGUỒN VỐN', ''],
@@ -207,6 +219,7 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
       ['  II. Phải trả người bán (TK 331)', fmt(payables)],
       ['  III. Thuế phải nộp (TK 333)', fmt(taxPayable)],
       ['  IV. Phải trả người lao động (TK 334)', fmt(salaryPayable)],
+      ['  Nợ phải trả khác (338, 341…)', fmt(otherLiabilities)],
       ['  V. Vốn chủ sở hữu (TK 411)', fmt(capital)],
       ['  VI. Lợi nhuận chưa phân phối (TK 421 + LNST)', fmt(retainedEarnings)],
       ['TỔNG CỘNG NGUỒN VỐN', fmt(totalLiabilities + totalEquity)],
@@ -353,6 +366,7 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
                     { label: 'B. Tài sản dài hạn', bold: true },
                     { label: 'TSCĐ hữu hình (211-214)', value: ppe - accDepreciation },
                     { label: 'Chi phí trả trước (242)', value: prepaid },
+                    { label: 'Tài sản khác (138, 141, 128…)', value: otherAssets },
                     { label: 'TỔNG CỘNG TÀI SẢN', value: totalAssets, bold: true, highlight: true },
                   ].map((row, i) => (
                     <div key={i} className={`flex justify-between items-center ${row.highlight ? 'border-t pt-1 font-bold' : ''}`}>
@@ -371,6 +385,7 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
                     { label: 'Phải trả người bán (331)', value: payables },
                     { label: 'Thuế và các khoản nộp NN (333)', value: taxPayable },
                     { label: 'Phải trả người lao động (334)', value: salaryPayable },
+                    { label: 'Nợ phải trả khác (338, 341…)', value: otherLiabilities },
                     { label: 'Tổng nợ phải trả', value: totalLiabilities, bold: true },
                     { label: 'B. Vốn chủ sở hữu', bold: true },
                     { label: 'Vốn góp (411)', value: capital },
@@ -487,54 +502,70 @@ export default function BCTCTab({ companyId }: { companyId: string }) {
       {activeView === 'gl' && (
         <Card>
           <CardHeader>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <CardTitle className="text-sm">Sổ cái (General Ledger)</CardTitle>
               <Select value={glAccount} onValueChange={setGlAccount}>
-                <SelectTrigger className="w-64 h-7 text-xs"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="w-72 h-7 text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {DEFAULT_ACCOUNTS.map(a => (
-                    <SelectItem key={a.code} value={a.code}>{a.code} — {a.name}</SelectItem>
+                  {glOptions.map(a => (
+                    <SelectItem key={a.code} value={a.code}>
+                      <span className={a.code.length > 3 ? 'pl-3' : 'font-medium'}>{a.code} — {a.name}</span>
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              <Button size="sm" variant="outline" className="ml-auto" onClick={exportGlExcel}>
+                <FileSpreadsheet className="h-3.5 w-3.5" /> Xuất Excel
+              </Button>
             </div>
           </CardHeader>
           <CardContent>
-            {glRowsWithBalance.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-6">Chưa có phát sinh cho tài khoản này</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="bg-gray-800 text-white">
-                      <th className="text-left p-2">Ngày</th>
-                      <th className="text-left p-2">Diễn giải</th>
-                      <th className="text-right p-2">Nợ</th>
-                      <th className="text-right p-2">Có</th>
-                      <th className="text-right p-2">Số dư</th>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-gray-800 text-white">
+                    <th className="text-left p-2">Ngày</th>
+                    <th className="text-left p-2">Diễn giải</th>
+                    <th className="text-left p-2">TK đối ứng</th>
+                    <th className="text-right p-2">Nợ</th>
+                    <th className="text-right p-2">Có</th>
+                    <th className="text-right p-2">Số dư</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="bg-indigo-50 font-medium">
+                    <td className="p-2" colSpan={5}>Số dư đầu kỳ</td>
+                    <td className="p-2 text-right">{fmtVND(Math.abs(glOpening))} {glOpening < 0 ? 'Có' : 'Nợ'}</td>
+                  </tr>
+                  {glRowsWithBalance.length === 0 && (
+                    <tr><td colSpan={6} className="p-4 text-center text-gray-400">Không có phát sinh trong kỳ</td></tr>
+                  )}
+                  {glRowsWithBalance.map((r, i) => (
+                    <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                      <td className="p-2 text-gray-500 whitespace-nowrap">{vnDate(r.date)}</td>
+                      <td className="p-2 text-gray-800 truncate max-w-xs" title={r.description}>{r.description}</td>
+                      <td className="p-2 font-mono text-gray-500" title={nameByCode.get(r.contra ?? '') ?? ''}>{r.contra}</td>
+                      <td className="p-2 text-right">{r.debit > 0 ? fmtVND(r.debit) : '—'}</td>
+                      <td className="p-2 text-right">{r.credit > 0 ? fmtVND(r.credit) : '—'}</td>
+                      <td className={`p-2 text-right font-medium ${r.balance < 0 ? 'text-red-600' : ''}`}>
+                        {fmtVND(Math.abs(r.balance))} {r.balance < 0 ? 'Có' : 'Nợ'}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {glRowsWithBalance.map((r, i) => (
-                      <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                        <td className="p-2 text-gray-500">{r.date}</td>
-                        <td className="p-2 text-gray-800 truncate max-w-xs">{r.description}</td>
-                        <td className="p-2 text-right">{r.debit > 0 ? fmtVND(r.debit) : '—'}</td>
-                        <td className="p-2 text-right">{r.credit > 0 ? fmtVND(r.credit) : '—'}</td>
-                        <td className={`p-2 text-right font-medium ${r.balance < 0 ? 'text-red-600' : ''}`}>
-                          {fmtVND(Math.abs(r.balance))} {r.balance < 0 ? 'Có' : 'Nợ'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                  ))}
+                  <tr className="bg-indigo-50 font-medium border-t-2 border-indigo-200">
+                    <td className="p-2" colSpan={3}>Cộng phát sinh / Số dư cuối kỳ</td>
+                    <td className="p-2 text-right">{fmtVND(glPeriodDebit)}</td>
+                    <td className="p-2 text-right">{fmtVND(glPeriodCredit)}</td>
+                    <td className="p-2 text-right">{fmtVND(Math.abs(runningBalance))} {runningBalance < 0 ? 'Có' : 'Nợ'}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </CardContent>
         </Card>
       )}
 
-      {transactions.length === 0 && (
+      {transactions.length === 0 && periodJEs.length === 0 && (
         <p className="text-sm text-amber-600 text-center">
           Chưa có giao dịch trong kỳ này. Hãy hạch toán ở tab Hạch toán trước.
         </p>

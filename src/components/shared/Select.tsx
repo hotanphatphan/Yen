@@ -36,13 +36,19 @@ const SelectContent = React.forwardRef<
       ref={ref}
       className={cn(
         'relative z-50 min-w-[8rem] overflow-hidden rounded-md border border-gray-200 bg-white shadow-md',
-        position === 'popper' && 'translate-y-1',
+        // Giới hạn chiều cao theo khoảng trống còn lại của màn hình → danh sách dài cuộn được, không bị đẩy ra ngoài
+        position === 'popper' && 'translate-y-1 max-h-[min(22rem,var(--radix-select-content-available-height))] max-w-[calc(100vw-16px)]',
         className
       )}
       position={position}
+      collisionPadding={8}
       {...props}
     >
-      <SelectPrimitive.Viewport className="p-1">{children}</SelectPrimitive.Viewport>
+      <SelectPrimitive.Viewport
+        className={cn('p-1', position === 'popper' && 'w-full min-w-[var(--radix-select-trigger-width)] max-h-[inherit] overflow-y-auto')}
+      >
+        {children}
+      </SelectPrimitive.Viewport>
     </SelectPrimitive.Content>
   </SelectPrimitive.Portal>
 ))

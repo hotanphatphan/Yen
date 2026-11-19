@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Pencil, Check, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Pencil, Check, X, FileSpreadsheet } from 'lucide-react'
+import { Button } from '@/components/shared/Button'
+import { downloadExcel, vnDate } from '@/lib/excelExport'
 import { supabase } from '@/lib/supabase'
 import { formatVND, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
@@ -242,6 +244,25 @@ export default function TrialBalanceTab({ companyId }: { companyId: string }) {
     )
   }
 
+  function exportTrialBalance() {
+    const line = (code: string, name: string, td: number, tc: number, b: number) =>
+      [code, name, td, tc, b > 0 ? b : '', b < 0 ? -b : '']
+    const rows = groups.flatMap(g => [
+      line(g.code, g.name, g.totalDebit, g.totalCredit, g.balance),
+      ...(g.self && g.children.length ? [line(`  ${g.code}`, `  ${g.name} (ghi thẳng TK mẹ)`, g.self.totalDebit, g.self.totalCredit, g.self.balance)] : []),
+      ...g.children.map(c => line(`  ${c.code}`, `  ${c.name}`, c.totalDebit, c.totalCredit, c.balance)),
+    ])
+    const dn = groups.reduce((s, g) => s + Math.max(0, g.balance), 0)
+    const dc = groups.reduce((s, g) => s + Math.max(0, -g.balance), 0)
+    downloadExcel('bang-can-doi-thu', [{
+      name: 'Cân đối thử',
+      title: ['BẢNG CÂN ĐỐI THỬ (TRIAL BALANCE)', `Lũy kế đến ngày ${vnDate(new Date().toISOString())}`],
+      header: ['Mã TK', 'Tên tài khoản', 'Tổng Nợ', 'Tổng Có', 'Dư Nợ', 'Dư Có'],
+      rows: [...rows, ['', 'TỔNG CỘNG', grandDebit, grandCredit, dn, dc]],
+      widths: [9, 45, 17, 17, 17, 17],
+    }])
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -252,11 +273,16 @@ export default function TrialBalanceTab({ companyId }: { companyId: string }) {
             Chênh lệch: {formatVND(Math.abs(grandDebit - grandCredit))} — kiểm tra lại bút toán
           </div>
         )}
-        {balanced && (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-700 text-sm">
-            <Check className="h-4 w-4" /> Cân bằng
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {balanced && (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-700 text-sm">
+              <Check className="h-4 w-4" /> Cân bằng
+            </div>
+          )}
+          <Button size="sm" variant="outline" onClick={exportTrialBalance}>
+            <FileSpreadsheet className="h-3.5 w-3.5" /> Xuất Excel
+          </Button>
+        </div>
       </div>
 
       <div className="rounded-xl border border-slate-200 overflow-hidden">

@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, BookOpen, X } from 'lucide-react'
+import { Plus, Trash2, BookOpen, X, FileSpreadsheet } from 'lucide-react'
 import { Button } from '@/components/shared/Button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/shared/Dialog'
 import { supabase } from '@/lib/supabase'
 import { COMMON_ACCOUNTS, getAccountName } from '@/lib/accountSuggestion'
 import { cn } from '@/lib/utils'
 import type { JournalEntry } from '@/types'
+import { downloadExcel, vnDate } from '@/lib/excelExport'
 
 const fmt = (n: number) => new Intl.NumberFormat('vi-VN').format(n)
 const digits = (s: string) => s.replace(/[^0-9]/g, '')
@@ -273,10 +274,26 @@ export default function ClosingEntriesTab({ companyId }: { companyId: string }) 
             Nhập bút toán thủ công, hỗ trợ nhiều dòng Nợ / nhiều dòng Có
           </p>
         </div>
-        <Button onClick={() => { setForm(emptyForm()); setOpen(true) }}>
-          <Plus className="h-4 w-4 mr-1.5" />
-          Thêm bút toán
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" disabled={filtered.length === 0} onClick={() => downloadExcel('but-toan-dieu-chinh-dong-so', [{
+            name: 'Bút toán',
+            title: [`BÚT TOÁN ${filterType === 'all' ? 'ĐIỀU CHỈNH & ĐÓNG SỔ' : (TYPE_LABELS[filterType] ?? filterType).toUpperCase()}`],
+            header: ['Ngày', 'Diễn giải', 'TK Nợ', 'TK Có', 'Số tiền', 'TK Nợ thuế', 'TK Có thuế', 'Tiền thuế', 'Loại', 'Nhóm bút toán'],
+            rows: [...filtered].sort((a, b) => a.date.localeCompare(b.date)).map(e => {
+              const vat = e.vat_amount && e.vat_debit_account && e.vat_credit_account ? e.vat_amount : 0
+              return [vnDate(e.date), e.description, e.debit_account, e.credit_account, e.amount,
+                vat ? e.vat_debit_account : '', vat ? e.vat_credit_account : '', vat || '', TYPE_LABELS[e.type ?? ''] ?? e.type, e.group_id ? e.group_id.slice(0, 8) : '']
+            }),
+            widths: [11, 60, 8, 8, 15, 10, 10, 13, 14, 12],
+          }])}>
+            <FileSpreadsheet className="h-4 w-4 mr-1.5" />
+            Xuất Excel
+          </Button>
+          <Button onClick={() => { setForm(emptyForm()); setOpen(true) }}>
+            <Plus className="h-4 w-4 mr-1.5" />
+            Thêm bút toán
+          </Button>
+        </div>
       </div>
 
       {/* Filter tabs */}

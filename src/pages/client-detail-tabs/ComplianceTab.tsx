@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2, FileSpreadsheet } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -13,6 +13,11 @@ import { ComplianceBadge } from '@/components/shared/StatusBadge'
 import { useComplianceItems, useCreateComplianceItem, useUpdateComplianceStatus, useDeleteComplianceItem } from '@/hooks/useCompliance'
 import { formatDate, isOverdue } from '@/lib/utils'
 import type { ComplianceStatus, ComplianceType } from '@/types'
+import { downloadExcel, vnDate } from '@/lib/excelExport'
+
+const COMPLIANCE_STATUS_VI: Record<ComplianceStatus, string> = {
+  not_started: 'Chưa bắt đầu', in_progress: 'Đang làm', completed: 'Hoàn thành', overdue: 'Quá hạn',
+}
 
 const schema = z.object({
   name: z.string().min(1, 'Tên bắt buộc'),
@@ -73,9 +78,22 @@ export default function ComplianceTab({ companyId }: { companyId: string }) {
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h3 className="font-medium text-gray-900">Các đầu mục compliance</h3>
-        <Button size="sm" onClick={() => setOpen(true)}>
-          <Plus className="h-4 w-4" /> Thêm mục
-        </Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" disabled={items.length === 0} onClick={() => downloadExcel('lich-tuan-thu', [{
+            name: 'Tuân thủ',
+            title: ['LỊCH NGHĨA VỤ / TUÂN THỦ'],
+            header: ['Hạn nộp', 'Đầu mục', 'Loại', 'Kỳ', 'Trạng thái', 'Ghi chú'],
+            rows: [...items].sort((a, b) => a.due_date.localeCompare(b.due_date)).map(i => [
+              vnDate(i.due_date), i.name, TYPE_LABELS[i.type] ?? i.type, i.period, COMPLIANCE_STATUS_VI[i.status] ?? i.status, i.notes ?? '',
+            ]),
+            widths: [11, 70, 18, 10, 14, 40],
+          }])}>
+            <FileSpreadsheet className="h-4 w-4" /> Xuất Excel
+          </Button>
+          <Button size="sm" onClick={() => setOpen(true)}>
+            <Plus className="h-4 w-4" /> Thêm mục
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Trash2, ArrowDownCircle, ArrowUpCircle } from 'lucide-react'
+import { Plus, Trash2, ArrowDownCircle, ArrowUpCircle, FileSpreadsheet } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/shared/Button'
 import { Card, CardContent } from '@/components/shared/Card'
@@ -11,6 +11,7 @@ import { supabase } from '@/lib/supabase'
 import { formatDate, formatVND } from '@/lib/utils'
 import { DEFAULT_ACCOUNTS } from '@/lib/seeds/defaultAccounts'
 import type { JournalEntry } from '@/types'
+import { downloadExcel, vnDate } from '@/lib/excelExport'
 
 const ALL_ACCOUNTS = DEFAULT_ACCOUNTS
 
@@ -50,6 +51,24 @@ export default function CashLedgerTab({ companyId }: { companyId: string }) {
     if (e.credit_account === '111') return sum - e.amount
     return sum
   }, 0)
+
+  // Sổ quỹ tiền mặt: theo thứ tự ngày, có số tồn quỹ sau mỗi phiếu
+  function exportCashBook() {
+    let run = 0
+    const rows = [...entries].sort((a, b) => a.date.localeCompare(b.date)).map((e, i) => {
+      const thu = e.debit_account === '111' ? e.amount : 0
+      const chi = e.credit_account === '111' ? e.amount : 0
+      run += thu - chi
+      return [i + 1, vnDate(e.date), e.description, thu ? 'Phiếu thu' : 'Phiếu chi', thu ? e.credit_account : e.debit_account, thu || '', chi || '', run]
+    })
+    downloadExcel('so-quy-tien-mat', [{
+      name: 'Sổ quỹ tiền mặt',
+      title: ['SỔ QUỸ TIỀN MẶT (TK 111)'],
+      header: ['STT', 'Ngày', 'Diễn giải', 'Loại phiếu', 'TK đối ứng', 'Thu', 'Chi', 'Tồn quỹ'],
+      rows: [...rows, ['', '', 'TỔNG CỘNG', '', '', rows.reduce((s, r) => s + (Number(r[5]) || 0), 0), rows.reduce((s, r) => s + (Number(r[6]) || 0), 0), run]],
+      widths: [6, 11, 50, 11, 10, 15, 15, 15],
+    }])
+  }
 
   async function handleAdd() {
     if (!amount || !description) return
@@ -169,6 +188,11 @@ export default function CashLedgerTab({ companyId }: { companyId: string }) {
       {/* Entry list */}
       {entries.length > 0 && (
         <div className="space-y-1">
+          <div className="flex justify-end px-2">
+            <Button size="sm" variant="outline" onClick={exportCashBook}>
+              <FileSpreadsheet className="h-3.5 w-3.5" /> Xuất Excel
+            </Button>
+          </div>
           <div className="grid grid-cols-5 gap-2 px-2 text-xs text-slate-400 font-medium">
             <span>Ngày</span>
             <span className="col-span-2">Diễn giải</span>

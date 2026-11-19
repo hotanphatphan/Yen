@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, X } from 'lucide-react'
+import { Plus, Pencil, Trash2, X, FileSpreadsheet } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/shared/Card'
 import { Badge } from '@/components/shared/Badge'
 import { Button } from '@/components/shared/Button'
 import type { Account, AccountType } from '@/types'
+import { downloadExcel } from '@/lib/excelExport'
 
 const TYPE_LABELS: Record<AccountType, string> = {
   asset: 'Tài sản',
@@ -110,6 +111,15 @@ export default function ChartOfAccountsTab({ companyId }: { companyId: string })
         <p className="text-sm text-gray-500 flex-1">
           Danh mục tài khoản kế toán. Bạn có thể thêm tài khoản con (VD 1121 — Techcombank), đổi tên hoặc xóa tài khoản tự thêm.
         </p>
+        <Button size="sm" variant="outline" disabled={accounts.length === 0} onClick={() => downloadExcel('he-thong-tai-khoan', [{
+          name: 'Hệ thống TK',
+          title: ['HỆ THỐNG TÀI KHOẢN KẾ TOÁN'],
+          header: ['Mã TK', 'Tên tài khoản', 'Loại', 'TK mẹ'],
+          rows: [...accounts].sort((a, b) => a.code.localeCompare(b.code)).map(a => [a.code, a.name, TYPE_LABELS[a.type] ?? a.type, a.parent_code ?? '']),
+          widths: [9, 50, 16, 9],
+        }])}>
+          <FileSpreadsheet className="h-4 w-4" /> Xuất Excel
+        </Button>
         {!showForm && (
           <Button size="sm" onClick={openAdd}>
             <Plus className="h-4 w-4" /> Thêm tài khoản
