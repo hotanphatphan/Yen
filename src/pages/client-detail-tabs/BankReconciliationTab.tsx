@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { Upload, Plus, CheckCircle2, AlertCircle, XCircle, Trash2, Pencil,
-  Landmark, ChevronDown, ChevronUp, Link2, Sparkles, Check } from 'lucide-react'
+  Landmark, ChevronDown, ChevronUp, Link2, Sparkles, Check, FileSpreadsheet } from 'lucide-react'
+import * as XLSX from 'xlsx'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/shared/Button'
 import { Card, CardContent } from '@/components/shared/Card'
@@ -10,13 +11,40 @@ import { Label } from '@/components/shared/Label'
 import { supabase } from '@/lib/supabase'
 import { parseBankStatementWithGemini } from '@/lib/excel/parseBankStatement'
 import { autoMatchTransactions } from '@/lib/gemini'
-import type { BankTransaction, BankAccount, Invoice, AccountType } from '@/types'
+import type { BankTransaction, BankAccount, Invoice, AccountType, JournalEntry } from '@/types'
 import { formatDate, formatVND } from '@/lib/utils'
 import { COMMON_ACCOUNTS, getAccountName } from '@/lib/accountSuggestion'
 import { AccountPicker, type AccountOption } from '@/components/shared/AccountPicker'
 import { cn } from '@/lib/utils'
 import CashLedgerTab from './CashLedgerTab'
 import { SectionButToanDieuChinh } from './LedgerTab'
+
+/**
+ * Xuất sổ tiền gửi ngân hàng kèm hạch toán: mỗi dòng bút toán 1 hàng, TK Nợ / TK Có cùng hàng.
+ * Giao dịch có nhiều dòng bút toán (VD thù lao + thuế TNCN, phí thẻ + VAT) lặp lại ngày/diễn giải ở các hàng sau để lọc dễ.
+ */
+function exportBankExcel(txs: BankTransaction[], linesOf: (bt: BankTransaction) => JournalEntry[], suffix: string) {
+  const header = ['Ngày', 'Diễn giải sao kê', 'Thu (+)', 'Chi (−)', 'Số dư', 'Trạng thái', 'TK Nợ', 'TK Có', 'Số tiền hạch toán', 'Diễn giải bút toán']
+  const rows: (string | number)[][] = []
+  for (const bt of [...txs].sort((a, b) => a.date.localeCompare(b.date))) {
+    const [y, m, d] = bt.date.split('-')
+    const base = [`${d}/${m}/${y}`, bt.description, bt.amount > 0 ? bt.amount : '', bt.amount < 0 ? -bt.amount : '', bt.balance ?? '',
+      bt.status === 'matched' ? 'Đã hạch toán' : 'Chờ xử lý']
+    const lines = linesOf(bt).flatMap(l => {
+      const out: (string | number)[][] = [[l.debit_account, l.credit_account, l.amount, l.description ?? '']]
+      if (l.vat_amount > 0 && l.vat_debit_account && l.vat_credit_account) out.push([l.vat_debit_account, l.vat_credit_account, l.vat_amount, 'Thuế GTGT'])
+      return out
+    })
+    if (lines.length === 0) rows.push([...base, '', '', '', ''])
+    lines.forEach((ln, i) => rows.push(i === 0 ? [...base, ...ln] : [base[0], base[1], '', '', '', '', ...ln]))
+  }
+  const sum = (c: number) => rows.reduce((s, r) => s + (typeof r[c] === 'number' ? (r[c] as number) : 0), 0)
+  const ws = XLSX.utils.aoa_to_sheet([header, ...rows, ['', 'TỔNG CỘNG', sum(2), sum(3), '', '', '', '', sum(8), '']])
+  ws['!cols'] = [11, 60, 14, 14, 14, 13, 8, 8, 16, 60].map(wch => ({ wch }))
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Sổ tiền gửi NH')
+  XLSX.writeFile(wb, `so-tien-gui-ngan-hang-${suffix}-${new Date().toISOString().slice(0, 10)}.xlsx`)
+}
 
 // Suy ra năm / tháng / quý từ ngày giao dịch (dùng cho kho sao kê)
 function periodOf(dateStr: string | null): { year: number; month: number; quarter: number } | null {
@@ -251,6 +279,25 @@ function StatementsSection({ companyId }: { companyId: string }) {
       return (data ?? []) as BankTransaction[]
     },
   })
+
+  // Bút toán (để hiện Nợ/Có của từng giao dịch đã hạch toán + xuất Excel)
+  const { data: allJournal = [] } = useQuery({
+    queryKey: ['all-journal-entries', companyId],
+    queryFn: async () => {
+      const { data } = await supabase.from('journal_entries').select('*').eq('company_id', companyId).order('date', { ascending: false })
+      return (data ?? []) as JournalEntry[]
+    },
+  })
+  const journalLinesOf = useMemo(() => {
+    const byId = new Map(allJournal.map(e => [e.id, e]))
+    const byGroup = new Map<string, JournalEntry[]>()
+    for (const e of allJournal) if (e.group_id) byGroup.set(e.group_id, [...(byGroup.get(e.group_id) ?? []), e])
+    return (bt: BankTransaction): JournalEntry[] => {
+      const je = bt.journal_entry_id ? byId.get(bt.journal_entry_id) : undefined
+      if (!je) return []
+      return je.group_id ? (byGroup.get(je.group_id) ?? [je]) : [je]
+    }
+  }, [allJournal])
 
   // Danh mục tài khoản công ty (có cả tk con) cho ô chọn tài khoản có tìm kiếm
   const { data: dbAccounts = [] } = useQuery({
@@ -736,9 +783,13 @@ function StatementsSection({ companyId }: { companyId: string }) {
             <>
               <button onClick={() => { setFilterYear('all'); setFilterQuarter('all'); setFilterMonth('all') }}
                 className="text-xs text-indigo-500 hover:text-indigo-600 ml-1">Xóa lọc</button>
-              <span className="text-xs text-slate-400 ml-auto">{periodFiltered.length} giao dịch trong kỳ</span>
+              <span className="text-xs text-slate-400">{periodFiltered.length} giao dịch trong kỳ</span>
             </>
           )}
+          <Button size="sm" variant="outline" className="ml-auto" disabled={periodFiltered.length === 0}
+            onClick={() => exportBankExcel(periodFiltered, journalLinesOf, filtering ? 'ky-loc' : 'tat-ca')}>
+            <FileSpreadsheet className="h-3.5 w-3.5" /> Xuất Excel
+          </Button>
         </div>
       )}
 
@@ -879,7 +930,23 @@ function StatementsSection({ companyId }: { companyId: string }) {
                         <input type="checkbox" checked={selectedTxIds.has(bt.id)} onChange={() => toggleSelect(bt.id)} className="rounded shrink-0" />
                         <div className="min-w-0">
                           <p className="text-slate-700 truncate">{bt.description}</p>
-                          <p className="text-xs text-slate-400">{formatDate(bt.date)}</p>
+                          <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                            <span className="text-xs text-slate-400">{formatDate(bt.date)}</span>
+                            {journalLinesOf(bt).flatMap(l => {
+                              const many = journalLinesOf(bt).length > 1 || (l.vat_amount > 0 && l.vat_debit_account)
+                              const chips = [
+                                <span key={l.id} title={l.description ?? ''} className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-white border border-green-200 text-slate-600">
+                                  Nợ {l.debit_account} / Có {l.credit_account}{many ? ` · ${formatVND(l.amount)}` : ''}
+                                </span>,
+                              ]
+                              if (l.vat_amount > 0 && l.vat_debit_account && l.vat_credit_account) chips.push(
+                                <span key={l.id + 'v'} title="Thuế GTGT" className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-white border border-green-200 text-slate-500">
+                                  Nợ {l.vat_debit_account} / Có {l.vat_credit_account} · {formatVND(l.vat_amount)}
+                                </span>,
+                              )
+                              return chips
+                            })}
+                          </div>
                         </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0 ml-2">

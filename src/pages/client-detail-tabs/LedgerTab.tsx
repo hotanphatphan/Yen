@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { Sparkles, Loader2, CheckCircle2, AlertCircle, Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
+import { useState, useMemo } from 'react'
+import { Sparkles, Loader2, CheckCircle2, AlertCircle, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Check, X, FileSpreadsheet } from 'lucide-react'
+import * as XLSX from 'xlsx'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/shared/Button'
 import { Input } from '@/components/shared/Input'
@@ -421,6 +422,25 @@ function SectionDoanhThu({ companyId }: { companyId: string }) {
 
 // --- Section C: Bút toán điều chỉnh ---
 
+/** Xuất sổ nhật ký: mỗi bút toán 1 dòng, TK Nợ và TK Có nằm cùng hàng (kèm vế thuế GTGT nếu có). */
+function exportJournalExcel(entries: JournalEntry[], nameOf: (code: string | null) => string) {
+  const sorted = [...entries].sort((a, b) => a.date.localeCompare(b.date))
+  const header = ['STT', 'Ngày', 'Diễn giải', 'TK Nợ', 'Tên TK Nợ', 'TK Có', 'Tên TK Có', 'Số tiền',
+    'TK Nợ thuế', 'TK Có thuế', 'Tiền thuế GTGT', 'Tổng cộng', 'Loại', 'Ghi chú']
+  const rows = sorted.map((e, i) => {
+    const vat = e.vat_amount && e.vat_debit_account && e.vat_credit_account ? e.vat_amount : 0
+    const [y, m, d] = e.date.split('-')
+    return [i + 1, `${d}/${m}/${y}`, e.description ?? '', e.debit_account, nameOf(e.debit_account), e.credit_account, nameOf(e.credit_account),
+      e.amount, vat ? e.vat_debit_account : '', vat ? e.vat_credit_account : '', vat, e.amount + vat, e.type ?? '', e.notes ?? '']
+  })
+  const total = (col: number) => rows.reduce((s, r) => s + (Number(r[col]) || 0), 0)
+  const ws = XLSX.utils.aoa_to_sheet([header, ...rows, ['', '', 'TỔNG CỘNG', '', '', '', '', total(7), '', '', total(10), total(11), '', '']])
+  ws['!cols'] = [6, 11, 60, 8, 28, 8, 28, 15, 10, 10, 14, 15, 11, 30].map(wch => ({ wch }))
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Nhật ký chung')
+  XLSX.writeFile(wb, `so-nhat-ky-chung-${new Date().toISOString().slice(0, 10)}.xlsx`)
+}
+
 export function SectionButToanDieuChinh({ companyId }: { companyId: string }) {
   const qc = useQueryClient()
   const ALL_ACCOUNTS = DEFAULT_ACCOUNTS
@@ -446,9 +466,65 @@ export function SectionButToanDieuChinh({ companyId }: { companyId: string }) {
 
   const deleteEntry = useMutation({
     mutationFn: async (id: string) => {
-      await supabase.from('journal_entries').delete().eq('id', id)
+      const { error } = await supabase.from('journal_entries').delete().eq('id', id)
+      if (error) throw error
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['journal-entries', companyId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['journal-entries', companyId] })
+      qc.invalidateQueries({ queryKey: ['all-journal-entries', companyId] })
+    },
+    onError: (err) => alert('Xóa bút toán thất bại: ' + (err as Error).message),
+  })
+
+  // Danh mục TK: mặc định + TK con công ty tự mở (1121, 1388, 6428…)
+  const { data: companyAccounts = [] } = useQuery({
+    queryKey: ['accounts', companyId],
+    queryFn: async () => {
+      const { data } = await supabase.from('accounts').select('code, name').eq('company_id', companyId)
+      return (data ?? []) as { code: string; name: string }[]
+    },
+  })
+  const accountOptions = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const a of ALL_ACCOUNTS) m.set(a.code, a.name)
+    for (const a of companyAccounts) m.set(a.code, a.name)
+    return [...m].map(([code, name]) => ({ code, name })).sort((a, b) => a.code.localeCompare(b.code))
+  }, [ALL_ACCOUNTS, companyAccounts])
+  const nameOf = (code: string | null) => (code ? accountOptions.find(a => a.code === code)?.name ?? code : '')
+
+  // ── Sửa bút toán trên cùng 1 hàng ──
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [form, setForm] = useState({ date: '', description: '', debit: '', credit: '', amount: 0, vatDebit: '', vatCredit: '', vat: 0 })
+  function startEdit(e: JournalEntry) {
+    setEditingId(e.id)
+    setForm({
+      date: e.date, description: e.description ?? '', debit: e.debit_account, credit: e.credit_account, amount: e.amount,
+      vatDebit: e.vat_debit_account ?? '', vatCredit: e.vat_credit_account ?? '', vat: e.vat_amount ?? 0,
+    })
+  }
+  const updateEntry = useMutation({
+    mutationFn: async (id: string) => {
+      if (!form.debit || !form.credit || !form.amount) throw new Error('Cần đủ TK Nợ, TK Có và số tiền.')
+      const hasVat = form.vat > 0
+      if (hasVat && (!form.vatDebit || !form.vatCredit)) throw new Error('Có tiền thuế thì phải nhập đủ TK Nợ/Có của thuế.')
+      const { error } = await supabase.from('journal_entries').update({
+        date: form.date,
+        description: form.description.trim() || null,
+        debit_account: form.debit,
+        credit_account: form.credit,
+        amount: form.amount,
+        vat_debit_account: hasVat ? form.vatDebit : null,
+        vat_credit_account: hasVat ? form.vatCredit : null,
+        vat_amount: hasVat ? form.vat : 0,
+      }).eq('id', id)
+      if (error) throw error
+    },
+    onSuccess: () => {
+      setEditingId(null)
+      qc.invalidateQueries({ queryKey: ['journal-entries', companyId] })
+      qc.invalidateQueries({ queryKey: ['all-journal-entries', companyId] })
+    },
+    onError: (err) => alert('Lưu bút toán thất bại: ' + (err as Error).message),
   })
 
   async function handleAdd() {
@@ -534,21 +610,60 @@ export function SectionButToanDieuChinh({ companyId }: { companyId: string }) {
       {/* Danh sách bút toán */}
       {entries.length > 0 && (
         <div className="space-y-1">
-          <div className="grid grid-cols-5 gap-2 px-2 text-xs text-gray-400 font-medium">
-            <span>Ngày</span>
-            <span className="col-span-2">Diễn giải</span>
-            <span>Nợ / Có</span>
-            <span className="text-right">Số tiền</span>
+          <div className="flex items-center justify-between px-2">
+            <p className="text-xs text-gray-500">{entries.length} bút toán</p>
+            <Button size="sm" variant="outline" onClick={() => exportJournalExcel(entries, nameOf)}>
+              <FileSpreadsheet className="h-3.5 w-3.5" /> Xuất Excel
+            </Button>
           </div>
-          {entries.map(e => (
-            <div key={e.id} className="grid grid-cols-5 gap-2 items-center p-2.5 rounded border border-gray-100 hover:bg-gray-50 text-sm">
-              <span className="text-xs text-gray-400">{formatDate(e.date)}</span>
-              <span className="col-span-2 text-gray-900 truncate">{e.description || '—'}</span>
-              <span className="text-xs text-gray-500">Nợ {e.debit_account} / Có {e.credit_account}</span>
-              <div className="flex items-center justify-end gap-1">
+          <datalist id="adj-account-options">
+            {accountOptions.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}
+          </datalist>
+          <div className="grid grid-cols-12 gap-2 px-2 text-xs text-gray-400 font-medium">
+            <span className="col-span-2">Ngày</span>
+            <span className="col-span-3">Diễn giải</span>
+            <span className="col-span-2">TK Nợ</span>
+            <span className="col-span-2">TK Có</span>
+            <span className="col-span-2 text-right">Số tiền</span>
+            <span />
+          </div>
+          {entries.map(e => editingId === e.id ? (
+            <div key={e.id} className="rounded border border-indigo-200 bg-indigo-50/40 p-2 text-sm space-y-1.5">
+              <div className="grid grid-cols-12 gap-2 items-center">
+                <Input className="col-span-2 h-8 text-xs" type="date" value={form.date} onChange={ev => setForm(f => ({ ...f, date: ev.target.value }))} />
+                <Input className="col-span-3 h-8 text-xs" value={form.description} onChange={ev => setForm(f => ({ ...f, description: ev.target.value }))} />
+                <Input className="col-span-2 h-8 px-2 text-xs font-mono" list="adj-account-options" value={form.debit} onChange={ev => setForm(f => ({ ...f, debit: ev.target.value.trim() }))} />
+                <Input className="col-span-2 h-8 px-2 text-xs font-mono" list="adj-account-options" value={form.credit} onChange={ev => setForm(f => ({ ...f, credit: ev.target.value.trim() }))} />
+                <div className="col-span-2"><VNDInput className="h-8 text-xs" value={form.amount} onChange={n => setForm(f => ({ ...f, amount: n }))} /></div>
+                <div className="flex justify-end gap-1">
+                  <button title="Lưu" disabled={updateEntry.isPending} onClick={() => updateEntry.mutate(e.id)} className="p-1 text-green-600 hover:text-green-700"><Check className="h-4 w-4" /></button>
+                  <button title="Hủy" onClick={() => setEditingId(null)} className="p-1 text-gray-400 hover:text-gray-600"><X className="h-4 w-4" /></button>
+                </div>
+              </div>
+              <div className="grid grid-cols-12 gap-2 items-center">
+                <span className="col-span-5 text-right text-xs text-gray-500">Thuế GTGT (nếu có):</span>
+                <Input className="col-span-2 h-8 px-2 text-xs font-mono" placeholder="Nợ" list="adj-account-options" value={form.vatDebit} onChange={ev => setForm(f => ({ ...f, vatDebit: ev.target.value.trim() }))} />
+                <Input className="col-span-2 h-8 px-2 text-xs font-mono" placeholder="Có" list="adj-account-options" value={form.vatCredit} onChange={ev => setForm(f => ({ ...f, vatCredit: ev.target.value.trim() }))} />
+                <div className="col-span-2"><VNDInput className="h-8 text-xs" value={form.vat} onChange={n => setForm(f => ({ ...f, vat: n }))} /></div>
+              </div>
+            </div>
+          ) : (
+            <div key={e.id} className="grid grid-cols-12 gap-2 items-center p-2.5 rounded border border-gray-100 hover:bg-gray-50 text-sm group">
+              <span className="col-span-2 text-xs text-gray-400">{formatDate(e.date)}</span>
+              <span className="col-span-3 text-gray-900 truncate" title={e.description ?? ''}>{e.description || '—'}</span>
+              <span className="col-span-2 text-xs font-mono text-gray-600" title={nameOf(e.debit_account)}>{e.debit_account}</span>
+              <span className="col-span-2 text-xs font-mono text-gray-600" title={nameOf(e.credit_account)}>{e.credit_account}</span>
+              <div className="col-span-2 text-right">
                 <span className="font-medium">{formatVND(e.amount)}</span>
+                {e.vat_amount > 0 && e.vat_debit_account && e.vat_credit_account && (
+                  <p className="text-[11px] text-gray-400" title={`Thuế GTGT: Nợ ${e.vat_debit_account} / Có ${e.vat_credit_account}`}>+ VAT {formatVND(e.vat_amount)}</p>
+                )}
+              </div>
+              <div className="flex items-center justify-end gap-1">
+                <button title="Sửa" onClick={() => startEdit(e)} className="p-1 text-gray-300 hover:text-indigo-500"><Pencil className="h-3.5 w-3.5" /></button>
                 <button
-                  onClick={() => deleteEntry.mutate(e.id)}
+                  title="Xóa"
+                  onClick={() => { if (confirm('Xóa bút toán này?')) deleteEntry.mutate(e.id) }}
                   className="p-1 text-gray-300 hover:text-red-400"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
