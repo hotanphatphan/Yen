@@ -110,6 +110,8 @@ export function computeVat01(invoices: Vat01Invoice[], adj: Vat01Adjust = EMPTY_
   for (const inv of invoices) {
     const parts = splitByRate(inv)
     if (inv.direction === 'incoming') {
+      // [23]/[24] chỉ gồm HHDV mua vào có thuế GTGT được khấu trừ; hóa đơn bán hàng, hàng KCT (thuế = 0) không kê.
+      if (!inv.vat_amount) continue
       v.ct23 += inv.subtotal
       v.ct24 += inv.vat_amount
       for (const p of parts) if (p.reduced) { v.purchaseReducedBase += p.base; v.purchaseReducedVat += p.vat }

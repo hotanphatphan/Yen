@@ -21,6 +21,7 @@ import { supabase } from '@/lib/supabase'
 import { suggestAccounts, COMMON_ACCOUNTS, getAccountName } from '@/lib/accountSuggestion'
 import { cn } from '@/lib/utils'
 import { findDuplicateGroups, invoiceKey, normalizeNumber } from '@/lib/invoiceDedupe'
+import { buildAccountHistory, pickAccounts, bulkDescription } from '@/lib/bulkPosting'
 import type { Invoice, JournalEntry, AccountType } from '@/types'
 // ─── PDF text extraction ──────────────────────────────────────────────────────
 
@@ -712,6 +713,62 @@ export default function InvoicesTab({ companyId, companyMst }: {
     },
   })
 
+  // ── Hạch toán hàng loạt theo cách công ty đã hạch toán trước đó ──
+  const bulkPostMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const targets = invoices.filter(i => ids.includes(i.id) && i.status === 'pending' && i.invoice_date)
+      const { data: je, error } = await supabase.from('journal_entries')
+        .select('invoice_id, debit_account, credit_account, vat_debit_account, vat_credit_account')
+        .eq('company_id', companyId).eq('type', 'invoice').not('invoice_id', 'is', null)
+      if (error) throw error
+      const invById = new Map(invoices.map(i => [i.id, i]))
+      const history = buildAccountHistory((je ?? []).flatMap(e => {
+        const inv = invById.get(e.invoice_id as string)
+        return inv ? [{ direction: inv.direction, seller_mst: inv.seller_mst, buyer_mst: inv.buyer_mst, ...e }] : []
+      }))
+      let ok = 0
+      const failed: string[] = []
+      for (const inv of targets) {
+        const a = pickAccounts(inv, history)
+        const label = `${inv.invoice_series ?? ''}/${inv.invoice_number ?? ''}`
+        const { data: entry, error: e1 } = await supabase.from('journal_entries').insert({
+          company_id: companyId,
+          date: inv.invoice_date,
+          description: bulkDescription(inv),
+          type: 'invoice',
+          debit_account: a.debit,
+          credit_account: a.credit,
+          amount: inv.subtotal,
+          vat_debit_account: a.vatDebit,
+          vat_credit_account: a.vatCredit,
+          vat_amount: inv.vat_amount,
+          invoice_id: inv.id,
+          status: 'posted',
+        }).select('id').single()
+        if (e1 || !entry) { failed.push(`${label}: ${e1?.message ?? 'không tạo được bút toán'}`); continue }
+        const { error: e2 } = await supabase.from('invoices').update({ status: 'posted' }).eq('id', inv.id)
+        if (e2) {
+          await supabase.from('journal_entries').delete().eq('id', entry.id)
+          failed.push(`${label}: ${e2.message}`)
+          continue
+        }
+        ok++
+      }
+      return { ok, failed, skipped: ids.length - targets.length }
+    },
+    onSuccess: ({ ok, failed, skipped }) => {
+      setSelectedIds(new Set())
+      queryClient.invalidateQueries({ queryKey: ['invoices', companyId] })
+      queryClient.invalidateQueries({ queryKey: ['all-journal-entries', companyId] })
+      alert(
+        `Đã hạch toán ${ok} hóa đơn.` +
+        (skipped ? `\nBỏ qua ${skipped} hóa đơn (đã hạch toán hoặc thiếu ngày lập).` : '') +
+        (failed.length ? `\nLỗi ${failed.length}:\n${failed.join('\n')}` : '')
+      )
+    },
+    onError: (err) => alert('Hạch toán hàng loạt thất bại: ' + (err as Error).message),
+  })
+
   const toggleSelect = (id: string) => setSelectedIds(prev => {
     const next = new Set(prev)
     next.has(id) ? next.delete(id) : next.add(id)
@@ -822,6 +879,7 @@ export default function InvoicesTab({ companyId, companyMst }: {
   const posted = invoices.filter(i => i.status === 'posted')
   const duplicateGroups = useMemo(() => findDuplicateGroups(invoices), [invoices])
   const duplicateExtraIds = useMemo(() => duplicateGroups.flatMap(g => g.extras.map(e => e.id)), [duplicateGroups])
+  const selectedPendingCount = invoices.filter(i => selectedIds.has(i.id) && i.status === 'pending').length
 
   // ── Kho hóa đơn: lọc & nhóm theo quý / tháng ──
   const [filterYear, setFilterYear] = useState<number | 'all'>('all')
@@ -969,6 +1027,22 @@ export default function InvoicesTab({ companyId, companyMst }: {
                 className="flex items-center gap-1.5 px-3 py-1 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-medium rounded-lg border border-red-200 transition-colors"
               >
                 <Trash2 className="h-3.5 w-3.5" /> Xóa {selectedIds.size} mục
+              </button>
+            )}
+            {selectedPendingCount > 0 && (
+              <button
+                disabled={bulkPostMutation.isPending}
+                onClick={() => {
+                  if (confirm(
+                    `Hạch toán ${selectedPendingCount} hóa đơn chờ hạch toán?\n\n` +
+                    `Mỗi hóa đơn dùng lại tài khoản đã hạch toán cho cùng người bán/khách hàng; ` +
+                    `nếu chưa có thì dùng bộ tài khoản công ty hay dùng nhất. Có thể sửa từng bút toán sau.`
+                  )) bulkPostMutation.mutate([...selectedIds])
+                }}
+                className="flex items-center gap-1.5 px-3 py-1 bg-green-50 hover:bg-green-100 text-green-700 text-xs font-medium rounded-lg border border-green-200 transition-colors disabled:opacity-50"
+              >
+                <BookOpen className="h-3.5 w-3.5" />
+                {bulkPostMutation.isPending ? 'Đang hạch toán...' : `Hạch toán ${selectedPendingCount} HĐ`}
               </button>
             )}
           </div>
